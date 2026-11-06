@@ -28,6 +28,45 @@
    [:bookmarks "local_bookmarks.map(|b| b.name()).join(\" \")"]
    [:description "description.first_line()"]])
 
+;; ---------------------------------------------------------------------------
+;; Schemas (malli, plain data: validated in the tests, not at runtime)
+
+(def Entry
+  "A change, parsed from the hidden marker."
+  [:map
+   [:index :int]
+   [:change-id :string]
+   [:short-id :string]
+   [:commit-id :string]
+   [:parents [:vector :string]]
+   [:immutable? :boolean]
+   [:empty? :boolean]
+   [:conflict? :boolean]
+   [:divergent? :boolean]
+   [:working-copy? :boolean]
+   [:bookmarks [:vector :string]]
+   [:description :string]])
+
+(def FileChange
+  [:map
+   [:status [:enum "M" "A" "D" "R" "C" "?"]]
+   [:path :string]
+   [:source [:maybe :string]]])
+
+(def Row
+  "A display line. :entry indexes into the log's :entries."
+  [:multi {:dispatch :kind}
+   [:node [:map [:kind [:= :node]] [:entry :int] [:line :string]]]
+   [:text [:map [:kind [:= :text]] [:entry :int] [:line :string]]]
+   [:file [:map [:kind [:= :file]] [:entry :int] [:prefix :string] [:file FileChange]]]
+   [:other [:map [:kind [:= :other]] [:line :string]]]])
+
+(def Log
+  "What `parse` returns."
+  [:map
+   [:entries [:vector Entry]]
+   [:rows [:vector Row]]])
+
 (defn files-revset
   "Revset matching the changes whose file list is expanded."
   [change-ids]

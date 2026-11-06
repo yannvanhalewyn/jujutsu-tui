@@ -563,6 +563,7 @@ const DIFF_TOOLS = {
   delta:      { edn: '"jj diff --git -r $revset $files | delta --paging=always"', cmd: 'jj diff --git -r $revset $files | delta --paging=always', note: 'A string runs with sh -c, so pipes work; every substituted value is shell-quoted.' },
   diffview:   { edn: '["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]', cmd: ['nvim', '-c', 'DiffviewOpen $from-sha..$to-sha'], note: 'Opens diffview.nvim. Requires a colocated git repo.' },
   difftool:   { edn: '["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]', cmd: ['git', 'difftool', '--dir-diff', '$from-sha', '$to-sha', '--', '$files'], note: 'Your configured git difftool in dir-diff mode. Requires a colocated git repo.' },
+  'nvim + difftastic': { key: 'nvim-difftastic', example: true, edn: '["nvim" "-c" "Difft $revset"]', cmd: ['nvim', '-c', 'Difft $revset'], note: 'Example, not a default. Opens Neovim with clabby/difftastic.nvim; :Difft <revset> runs jj diff -r <revset> --tool difft, so ranges (D) and marked sets work. Shows the whole revset even on a file row. No colocated git repo needed.' },
   'stat (map + :wait?)': { key: 'stat', example: true, wait: true, edn: '{:cmd ["jj" "diff" "--stat" "-r" "$revset" "$files"]\n                    :wait? true}', cmd: ['jj', 'diff', '--stat', '-r', '$revset', '$files'], note: 'Example, not a default. The map form adds :wait? true: the tool prints and exits, then jjtui shows "Press any key to return to jjtui" before resuming.' },
 };
 const PREVIEWS = {

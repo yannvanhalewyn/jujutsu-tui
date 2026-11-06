@@ -69,7 +69,7 @@ Press ? inside the TUI for keybindings.")
                 :alt-screen true
                 :overflow :bottom
                 ;; Asked once; restarts reuse the answer instead of re-querying
-                :dark-background? (:dark-known state)}))
+                :dark-background? (:app/dark-known state)}))
 
 (defn -main [& args]
   (let [opts (parse-args args)]
@@ -98,6 +98,6 @@ Press ? inside the TUI for keybindings.")
                                                   :base-template (or (:log-template config)
                                                                      (jj/base-template root))}))]
             (let [state (run-program step)]
-              (when-let [exec (:exec state)]
+              (when-let [exec (:app/exec state)]
                 (let [exit (run-interactive root exec)]
-                  (recur (app/after-exec (assoc state :dark-known (:dark? state)) {:exit exit})))))))))))
+                  (recur (app/after-exec (assoc state :app/dark-known (:app/dark? state)) {:exit exit})))))))))))

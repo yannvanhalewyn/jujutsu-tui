@@ -42,7 +42,7 @@
       :else {:target (assoc target :from-sha (:id from) :to-sha (first (:ids to)))})))
 
 (defn- effect->cmd [state {:keys [fx] :as effect}]
-  (let [dir (:dir state)]
+  (let [dir (:app/dir state)]
     (case fx
       :quit program/quit-cmd
 
