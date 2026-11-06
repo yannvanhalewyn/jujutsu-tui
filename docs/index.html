@@ -1,0 +1,1284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jjtui — a keyboard-driven TUI for jujutsu</title>
+<meta name="description" content="jjtui: a babashka TUI for navigating jujutsu (jj) repos, built on charm.clj.">
+<script>
+  // Theme bootstrap (runs before paint): stored choice wins, else prefers-color-scheme.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('jjtui-theme'); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') {
+      t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<style>
+:root {
+  --bg: #f7f7fa; --bg2: #ffffff; --fg: #1c1e24; --muted: #5d6472; --border: #e2e4ea;
+  --accent: #8b3fd9; --accent-soft: rgba(139,63,217,.10); --link: #2f62d8;
+  --code-bg: #f0f1f5; --code-fg: #2a2d36; --kbd-bg: #ffffff; --kbd-border: #cfd3dc;
+  --shadow: 0 1px 2px rgba(20,20,40,.05), 0 6px 24px rgba(20,20,40,.06);
+  --done: #22a06b; --prog: #d98a00; --plan: #2f62d8; --idea: #8b3fd9;
+  --tok-kw: #8b3fd9; --tok-str: #1f7a4d; --tok-com: #7d8494; --tok-num: #b35c00; --tok-var: #c0336e;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+}
+[data-theme="dark"] {
+  --bg: #0f1116; --bg2: #161922; --fg: #e3e6ee; --muted: #9aa1b2; --border: #262a36;
+  --accent: #c58bff; --accent-soft: rgba(197,139,255,.12); --link: #7aa7ff;
+  --code-bg: #1b1f2a; --code-fg: #dfe3ec; --kbd-bg: #1f2330; --kbd-border: #343a4b;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 30px rgba(0,0,0,.25);
+  --done: #3cc98a; --prog: #f2b33d; --plan: #7aa7ff; --idea: #c58bff;
+  --tok-kw: #c58bff; --tok-str: #8fd49b; --tok-com: #7a8296; --tok-num: #f2b36b; --tok-var: #ff86b5;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, kbd, pre { font-family: var(--mono); }
+code { background: var(--code-bg); color: var(--code-fg); padding: .1em .35em; border-radius: 4px; font-size: .88em; }
+kbd { display: inline-block; min-width: 1.6em; text-align: center; background: var(--kbd-bg); border: 1px solid var(--kbd-border); border-bottom-width: 2px; border-radius: 5px; padding: 0 .4em; font-size: .82em; line-height: 1.6; white-space: nowrap; }
+h1, h2, h3 { line-height: 1.25; }
+h2 { font-size: 1.6rem; margin: 0 0 .4rem; }
+h3 { font-size: 1.1rem; margin: 1.6rem 0 .6rem; }
+p { margin: .5rem 0 .9rem; }
+.muted { color: var(--muted); }
+
+/* ---------- layout ---------- */
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); max-width: 1280px; margin: 0 auto; }
+nav.side { position: sticky; top: 0; height: 100vh; padding: 28px 18px; border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+nav.side .brand { font: 700 1.25rem var(--mono); color: var(--fg); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+nav.side .brand .logo { width: 26px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, #b44fe8, #4f7bf0); color: #fff; display: grid; place-items: center; font-size: .8rem; }
+nav.side a.nav { color: var(--muted); padding: 6px 10px; border-radius: 6px; font-size: .93rem; }
+nav.side a.nav:hover { background: var(--accent-soft); color: var(--fg); text-decoration: none; }
+nav.side a.nav.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+nav.side .spacer { flex: 1; }
+.theme-btn { border: 1px solid var(--border); background: var(--bg2); color: var(--fg); border-radius: 8px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: .88rem; display: flex; align-items: center; gap: 8px; justify-content: center; }
+.theme-btn:hover { border-color: var(--accent); }
+main { padding: 28px 40px 80px; min-width: 0; }
+section { padding: 34px 0 20px; border-bottom: 1px solid var(--border); }
+section:last-child { border-bottom: 0; }
+.eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: .75rem; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  nav.side { position: sticky; top: 0; z-index: 20; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px 14px; border-right: 0; border-bottom: 1px solid var(--border); background: var(--bg); gap: 2px; }
+  nav.side .brand { margin: 0 10px 0 0; font-size: 1rem; }
+  nav.side .spacer { display: none; }
+  main { padding: 16px 16px 60px; }
+}
+
+/* ---------- hero ---------- */
+.hero h1 { font: 800 2.6rem/1.1 var(--mono); margin: 0 0 .5rem; letter-spacing: -.02em; }
+.hero h1 span { background: linear-gradient(90deg, #b44fe8, #4f7bf0); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero .pitch { font-size: 1.18rem; color: var(--muted); max-width: 46em; }
+.badges { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 18px; }
+.badge { font-size: .78rem; border: 1px solid var(--border); background: var(--bg2); border-radius: 999px; padding: 2px 10px; color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+
+/* ---------- code blocks ---------- */
+.code { position: relative; background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; margin: .4rem 0 1rem; }
+.code .label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 8px 14px 0; }
+.code pre { margin: 0; padding: 10px 14px 12px; overflow-x: auto; font-size: .84rem; line-height: 1.55; color: var(--code-fg); }
+.copy { position: absolute; top: 7px; right: 7px; border: 1px solid var(--border); background: var(--bg2); color: var(--muted); border-radius: 6px; font: 600 .72rem var(--sans); padding: 3px 8px; cursor: pointer; opacity: .85; }
+.copy:hover { color: var(--accent); border-color: var(--accent); opacity: 1; }
+.copy.ok { color: var(--done); border-color: var(--done); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-str { color: var(--tok-str); }
+.tok-kw { color: var(--tok-kw); }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); font-weight: 600; }
+.sh-prompt { color: var(--tok-com); user-select: none; }
+
+/* ---------- tables ---------- */
+table.t { width: 100%; border-collapse: collapse; font-size: .92rem; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+table.t th, table.t td { text-align: left; padding: 7px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.t th { font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); background: var(--code-bg); }
+table.t tr:last-child td { border-bottom: 0; }
+table.t td.k { white-space: nowrap; width: 1%; }
+table.t td.mn { white-space: nowrap; width: 1%; color: var(--accent); font-weight: 600; }
+mark { background: rgba(255, 200, 0, .35); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+/* ---------- chips / controls ---------- */
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 16px; }
+.search { flex: 1 1 260px; max-width: 420px; position: relative; }
+.search input { width: 100%; padding: 8px 12px 8px 32px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg); font: inherit; }
+.search input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); opacity: .5; }
+.chip { border: 1px solid var(--border); background: var(--bg2); color: var(--muted); border-radius: 999px; padding: 4px 12px; font: 600 .8rem var(--sans); cursor: pointer; }
+.chip:hover { border-color: var(--accent); color: var(--fg); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip .n { opacity: .7; font-weight: 500; margin-left: 4px; }
+select.sel { padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); color: var(--fg); font: inherit; font-size: .85rem; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--bg2); color: var(--muted); padding: 5px 12px; font: 600 .82rem var(--sans); cursor: pointer; }
+.seg button.on { background: var(--accent); color: #fff; }
+.note { background: var(--accent-soft); border-left: 3px solid var(--accent); padding: 8px 14px; border-radius: 0 8px 8px 0; font-size: .92rem; margin: 10px 0; }
+
+/* ---------- tabs ---------- */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); flex-wrap: wrap; margin-top: 8px; }
+.tabs button { border: 0; background: none; color: var(--muted); padding: 8px 14px; font: 600 .88rem var(--sans); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.tabpanel { padding-top: 12px; }
+
+/* ---------- terminal mock ---------- */
+.term-wrap { margin: 12px 0 6px; }
+.term { --t-bg: #121212; --t-fg: #d0d0d0; position: relative; background: var(--t-bg); color: var(--t-fg); border-radius: 12px; border: 1px solid #2c2c2c; box-shadow: 0 12px 40px rgba(0,0,0,.35); font: 13px/1.45 var(--mono); overflow: hidden; outline: none; }
+.term:focus { border-color: #7d5bd6; box-shadow: 0 0 0 3px rgba(125,91,214,.35), 0 12px 40px rgba(0,0,0,.35); }
+.term .bar { display: flex; align-items: center; gap: 7px; padding: 8px 12px; background: #1e1e1e; border-bottom: 1px solid #2a2a2a; font: 12px var(--sans); color: #9a9a9a; }
+.term .dot { width: 11px; height: 11px; border-radius: 50%; }
+.term .bar .title { flex: 1; text-align: center; }
+.term .lastkey { font: 11px var(--mono); color: #bdbdbd; background: #2c2c2c; border-radius: 5px; padding: 1px 7px; min-width: 110px; text-align: right; }
+.term .lastkey b { color: #ffd75f; }
+.term .body { position: relative; height: 430px; display: flex; flex-direction: column; }
+.term .panes { flex: 1; display: flex; min-height: 0; }
+.term .logp, .term .diffp { overflow: auto; padding: 4px 0; scrollbar-width: thin; scrollbar-color: #3a3a3a transparent; }
+.term .logp { flex: 1 1 auto; }
+.term .diffp { border-left: 1px solid #3a3a3a; flex: 0 0 auto; padding-left: 6px; }
+.term .l { white-space: pre; padding: 0 8px 0 4px; min-height: 1.45em; }
+.term .l.cur { background: #303850; }
+.term .l.pcur { background: #4a3a14; }
+.term .panel { border-top: 1px solid #3a3a3a; background: #181818; padding: 3px 8px; white-space: pre; }
+.term .panel:empty { display: none; }
+.term .status { display: flex; white-space: pre; background: #262626; color: #bcbcbc; overflow: hidden; }
+.term .status > span { padding: 0 8px; }
+.term .status .mode { background: #875fd7; color: #fff; font-weight: bold; }
+.term .status .mode.pick { background: #d7875f; }
+.term .status .mode.picker, .term .status .mode.input { background: #5f87d7; }
+.term .status .mode.menu, .term .status .mode.confirm { background: #d75f87; }
+.term .status .mode.help { background: #5faf5f; }
+.term .status .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.term .status .msg.err { color: #ff5f5f; }
+.term .status .msg.ok { color: #87d787; }
+.term .overlay { position: absolute; inset: 10px 14px 34px; background: rgba(18,18,18,.97); border: 1px solid #5f5f87; border-radius: 4px; padding: 8px 14px; overflow: auto; display: none; }
+.term .overlay.show { display: block; }
+.term .help-cols { columns: 2 260px; column-gap: 26px; }
+.term .help-g { break-inside: avoid; margin-bottom: 8px; }
+.term .help-g h4 { margin: 0 0 2px; color: #ffaf5f; font-size: 13px; }
+.term .help-row { display: flex; gap: 8px; }
+.term .help-row .hk { color: #87afff; min-width: 9.5em; flex: none; }
+.term .help-row .hd { color: #c6c6c6; }
+.term .susp { position: absolute; inset: 0; background: #0b0b0b; padding: 14px 18px; display: none; white-space: pre-wrap; }
+.term .susp.show { display: block; }
+.term .focus-hint { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); color: #fff; font: 600 14px var(--sans); cursor: pointer; transition: opacity .15s; }
+.term:focus .focus-hint, .term:focus-within .focus-hint { opacity: 0; pointer-events: none; }
+.term .focus-hint span { background: #875fd7; padding: 8px 16px; border-radius: 8px; }
+.c-mag { color: #d75fd7; } .c-magb { color: #ff87ff; font-weight: bold; }
+.c-blu { color: #5f87ff; } .c-blub { color: #87afff; font-weight: bold; }
+.c-gry { color: #808080; } .c-dim { color: #626262; }
+.c-yel { color: #d7d75f; } .c-grn { color: #5fd75f; } .c-grnb { color: #87ff5f; font-weight: bold; }
+.c-red { color: #ff5f5f; } .c-cyn { color: #5fd7d7; } .c-wht { color: #eeeeee; } .c-org { color: #ffaf5f; }
+.c-mark { color: #ffd75f; font-weight: bold; }
+.c-b { font-weight: bold; }
+.c-tag { background: #d7875f; color: #121212; padding: 0 3px; }
+.c-sel { background: #3a3a5a; }
+.c-fz { color: #ffd75f; font-weight: bold; text-decoration: underline; }
+.try { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .88rem; color: var(--muted); margin-top: 8px; }
+
+/* ---------- architecture ---------- */
+.mods { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.mod { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.mod h4 { margin: 0 0 4px; font: 700 .92rem var(--mono); color: var(--accent); }
+.mod p { margin: 0; font-size: .9rem; color: var(--muted); }
+.diagram { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin: 12px 0; }
+.diagram svg { width: 100%; height: auto; display: block; }
+.diagram svg text { font-family: var(--sans); fill: var(--fg); }
+.diagram .box { fill: var(--code-bg); stroke: var(--border); stroke-width: 1.5; }
+.diagram .box.hot { stroke: var(--accent); }
+.diagram .arrow { stroke: var(--muted); stroke-width: 1.6; fill: none; marker-end: url(#ah); }
+.diagram .lbl { font-size: 12px; fill: var(--muted); }
+.diagram .mono { font-family: var(--mono); font-size: 11.5px; fill: var(--accent); }
+.modes { display: flex; flex-wrap: wrap; gap: 6px; }
+.modes code { font-size: .85rem; }
+
+/* ---------- roadmap ---------- */
+.progress { display: flex; height: 12px; border-radius: 999px; overflow: hidden; background: var(--code-bg); border: 1px solid var(--border); margin: 8px 0 6px; }
+.progress > div { height: 100%; transition: width .3s; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: .85rem; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.board { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: start; }
+@media (max-width: 1100px) { .board { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .board { grid-template-columns: 1fr; } }
+.col { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.col h4 { margin: 0 0 8px; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; display: flex; align-items: center; gap: 6px; }
+.col h4 .cnt { margin-left: auto; color: var(--muted); font-weight: 500; }
+.card { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--st, var(--border)); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; box-shadow: var(--shadow); }
+.card .ti { font-weight: 600; font-size: .92rem; }
+.card .no { font-size: .83rem; color: var(--muted); margin-top: 2px; }
+.area { display: inline-block; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; margin-top: 5px; }
+.pill { display: inline-block; font-size: .72rem; font-weight: 700; border-radius: 999px; padding: 1px 9px; color: #fff; white-space: nowrap; }
+.empty { color: var(--muted); font-size: .85rem; font-style: italic; padding: 6px 2px; }
+footer { color: var(--muted); font-size: .85rem; padding: 30px 0 0; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="side" aria-label="Sections">
+    <a class="brand" href="#overview"><span class="logo">jj</span>jjtui</a>
+    <a class="nav" href="#overview">Overview</a>
+    <a class="nav" href="#demo">Try it</a>
+    <a class="nav" href="#keys">Keybindings</a>
+    <a class="nav" href="#config">Configuration</a>
+    <a class="nav" href="#architecture">Architecture</a>
+    <a class="nav" href="#roadmap">Roadmap</a>
+    <div class="spacer"></div>
+    <button class="theme-btn" id="themeBtn" type="button" aria-label="Toggle light/dark theme"><span id="themeIcon">☾</span><span id="themeLabel">Dark</span></button>
+  </nav>
+
+  <main>
+    <!-- ============ OVERVIEW ============ -->
+    <section id="overview" class="hero">
+      <div class="eyebrow">babashka · charm.clj · jujutsu</div>
+      <h1><span>jjtui</span></h1>
+      <p class="pitch">A fast, keyboard-driven terminal UI for navigating <a href="https://github.com/jj-vcs/jj">jujutsu</a> repos — vim bindings, mnemonic single-key actions and marks for batch operations, modeled on the jujutsu.nvim plugin.</p>
+      <div class="badges">
+        <span class="badge">babashka ≥ 1.12.215 (JLine bundled)</span>
+        <span class="badge">jj</span>
+        <span class="badge">charm.clj (Elm architecture)</span>
+        <span class="badge">EDN config</span>
+      </div>
+      <div class="grid2">
+        <div>
+          <h3 style="margin-top:0">Install</h3>
+          <div class="code"><button class="copy" type="button">Copy</button><pre data-sh>git clone &lt;repo-url&gt; jujutsu-tui &amp;&amp; cd jujutsu-tui
+ln -s $(pwd)/bin/jjtui ~/bin/jjtui</pre></div>
+        </div>
+        <div>
+          <h3 style="margin-top:0">Run (inside any jj repo)</h3>
+          <div class="code"><button class="copy" type="button">Copy</button><pre data-sh>jjtui [-r REVSET] [--config PATH]</pre></div>
+        </div>
+      </div>
+      <h3>Develop</h3>
+      <div class="code"><button class="copy" type="button">Copy</button><pre data-sh>bb start [args]       # run jjtui from the checkout (same args as jjtui)
+bb test               # run the test suite (includes jj integration tests)
+bb demo-repo [dir]    # throwaway repo, default /tmp/jjtui-demo</pre></div>
+      <p class="muted"><code>bb demo-repo</code> also creates a bare origin at <code>/tmp/jjtui-demo-origin.git</code> and pushes <code>main</code> (so it's immutable), plus <code>feature/login</code> (2 changes), <code>feature/docs</code> and a WIP change — a good playground for every key below.</p>
+      <h3>Layout at a glance</h3>
+      <ul>
+        <li><b>Log pane</b> — jj's own colored graph log (<code>jj log</code> with your <code>templates.log</code>, default revset or <code>-r</code>). The cursor is a highlighted change block; the gutter shows <code>●</code> for marked changes.</li>
+        <li><b>Inline file lists</b> under each change (status letter M/A/D/R/C + path), via <kbd>tab</kbd> for one change or <kbd>shift+tab</kbd> / <kbd>i</kbd> for all. File rows are selectable.</li>
+        <li><b>Split diff pane</b> on the right (log | diff) that follows the cursor, rendered by a configurable preview command.</li>
+        <li><b>Status bar</b> — mode, mark count, <code>--ignore-immutable</code> flag, revset, active diff tool, last message.</li>
+        <li><b>Bottom panel</b> for menus, pickers and prompts; <kbd>?</kbd> shows a full help overlay.</li>
+        <li><b>External / interactive commands</b> (diff tools, <code>$EDITOR</code> via <code>jj describe</code>, <code>jj split</code>, <code>jj squash</code> that may open an editor) suspend the TUI, run in the real terminal, then the TUI resumes and refreshes.</li>
+      </ul>
+    </section>
+
+    <!-- ============ DEMO ============ -->
+    <section id="demo">
+      <div class="eyebrow">Interactive illustration</div>
+      <h2>Try it</h2>
+      <p class="muted">Click the terminal, then use the real keys. This is a faithful illustration of the spec, not an emulator: commands are shown, the repo is never changed.</p>
+      <div class="term-wrap">
+        <div class="term" id="term" tabindex="0" role="application" aria-label="jjtui interactive mock">
+          <div class="bar">
+            <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
+            <span class="title">jjtui — ~/code/jjtui-demo</span>
+            <span class="lastkey" id="lastKey">last key: <b>–</b></span>
+          </div>
+          <div class="body">
+            <div class="panes"><div class="logp" id="tLog"></div><div class="diffp" id="tDiff" hidden></div></div>
+            <div class="panel" id="tPanel"></div>
+            <div class="status" id="tStatus"></div>
+            <div class="overlay" id="tHelp"></div>
+            <div class="susp" id="tSusp"></div>
+            <div class="focus-hint" id="tHint"><span>Click to focus · then press ?</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="try">
+        <span><kbd>j</kbd>/<kbd>k</kbd> move</span><span><kbd>m</kbd>/<kbd>space</kbd> mark</span><span><kbd>c</kbd> clear</span>
+        <span><kbd>tab</kbd> files</span><span><kbd>shift+tab</kbd>/<kbd>i</kbd> all files</span><span><kbd>|</kbd> diff pane</span>
+        <span><kbd>r</kbd> rebase</span><span><kbd>D</kbd> diff a branch</span><span><kbd>enter</kbd> external diff</span><span><kbd>?</kbd> help</span>
+        <span>· click outside the terminal to release the keyboard</span>
+      </div>
+    </section>
+
+    <!-- ============ KEYS ============ -->
+    <section id="keys">
+      <div class="eyebrow">Reference</div>
+      <h2>Keybindings</h2>
+      <p class="muted">Vim-style navigation, mnemonic single-key actions. Press <kbd>/</kbd> to search.</p>
+      <div class="controls">
+        <label class="search"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="5"/><path d="M11 11l4 4"/></svg>
+          <input id="keySearch" type="search" placeholder="Filter by key or description…" autocomplete="off"></label>
+        <div id="keyChips" class="controls" style="margin:0"></div>
+      </div>
+      <div id="keyTables"></div>
+      <p id="keyEmpty" class="empty" hidden>No bindings match.</p>
+    </section>
+
+    <!-- ============ CONFIG ============ -->
+    <section id="config">
+      <div class="eyebrow">Configuration</div>
+      <h2>config.edn</h2>
+      <p>File: <code>$XDG_CONFIG_HOME/jjtui/config.edn</code>, usually <code>~/.config/jjtui/config.edn</code> (override with <code>$JJTUI_CONFIG</code> or <code>--config</code>). EDN, with the <code>#env "VAR"</code> reader supported. All keys are optional; your map is deep-merged over the defaults.</p>
+      <div class="code"><div class="label">Defaults</div><button class="copy" type="button">Copy</button><pre id="cfgDefault"></pre></div>
+
+      <h3>Keys</h3>
+      <table class="t" id="cfgKeys"><thead><tr><th>Key</th><th>Default</th><th>Meaning</th></tr></thead><tbody></tbody></table>
+
+      <h3>External diff tools</h3>
+      <p class="muted">Used by <kbd>enter</kbd> and <kbd>D</kbd>; switch the active one at runtime with <kbd>v</kbd>. A <b>string</b> runs with <code>sh -c</code> (pipes ok, every substituted value shell-quoted). A <b>vector</b> is argv; a <code>"$files"</code> element expands to zero or more args. A <b>map</b> <code>{:cmd … :wait? true}</code> wraps either form and waits for a key after the tool exits (for tools that print and exit).</p>
+      <div class="tabs" id="toolTabs" role="tablist"></div>
+      <div class="tabpanel" id="toolPanel"></div>
+
+      <h3>Preview command (split diff pane)</h3>
+      <p class="muted">stdout is captured with ANSI colors kept and shown in the right-hand pane, following the cursor.</p>
+      <div class="tabs" id="prevTabs" role="tablist"></div>
+      <div class="tabpanel" id="prevPanel"></div>
+
+      <h3>Template variables</h3>
+      <table class="t"><thead><tr><th>Variable</th><th>Expands to</th></tr></thead><tbody>
+        <tr><td class="k"><code>$from-sha</code></td><td>commit id of the first parent of the oldest change in the selection; for <kbd>D</kbd> the fork point commit. With marks it is resolved via jj and needs a single root and head (otherwise jjtui reports an error).</td></tr>
+        <tr><td class="k"><code>$to-sha</code></td><td>commit id of the newest change in the selection; for <kbd>D</kbd> the bookmark's commit</td></tr>
+        <tr><td class="k"><code>$revset</code></td><td>jj revset of the selection: the cursor change, the marked commit ids joined with <code> | </code>, or <code>fork_point(trunk() | B)..B</code> for <kbd>D</kbd></td></tr>
+        <tr><td class="k"><code>$files</code></td><td>selected file paths, repo-relative; empty for the whole change</td></tr>
+        <tr><td class="k"><code>$width</code></td><td>pane / terminal width</td></tr>
+        <tr><td class="k"><code>$repo</code></td><td>workspace root</td></tr>
+      </tbody></table>
+      <div class="note">Commands run with the workspace root as cwd. If an interactive command exits non-zero (or the tool sets <code>:wait? true</code>), jjtui shows "Press any key to return to jjtui" before resuming. <code>diffview</code> / <code>difftool</code> require a colocated git repo.</div>
+    </section>
+
+    <!-- ============ ARCHITECTURE ============ -->
+    <section id="architecture">
+      <div class="eyebrow">Internals</div>
+      <h2>Architecture</h2>
+      <p class="muted">Built on <a href="https://github.com/TimoKramer/charm.clj">charm.clj</a> (Elm architecture: init / update / view).</p>
+      <div class="mods" id="mods"></div>
+
+      <h3>Suspend / resume loop</h3>
+      <p class="muted">Interactive commands need the real terminal. Instead of fighting the TUI for it, the program simply exits and is restarted with its saved state (pattern borrowed from prstack's <code>run-in-fg</code>).</p>
+      <div class="diagram">
+        <svg viewBox="0 0 860 330" role="img" aria-label="Suspend/resume loop diagram">
+          <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor" style="fill:var(--muted)"/></marker></defs>
+          <rect class="box hot" x="20" y="30" width="250" height="96" rx="12"/>
+          <text x="145" y="62" text-anchor="middle" font-weight="700">charm program running</text>
+          <text x="145" y="84" text-anchor="middle" class="mono">init → update → view</text>
+          <text x="145" y="106" text-anchor="middle" class="lbl">jjtui.app state machine</text>
+
+          <rect class="box" x="590" y="30" width="250" height="96" rx="12"/>
+          <text x="715" y="62" text-anchor="middle" font-weight="700">program exits</text>
+          <text x="715" y="84" text-anchor="middle" class="lbl">terminal restored;</text>
+          <text x="715" y="104" text-anchor="middle" class="lbl">state saved in jjtui.main</text>
+
+          <rect class="box" x="590" y="210" width="250" height="96" rx="12"/>
+          <text x="715" y="242" text-anchor="middle" font-weight="700">interactive command runs</text>
+          <text x="715" y="264" text-anchor="middle" class="lbl">inherited stdio:</text>
+          <text x="715" y="284" text-anchor="middle" class="mono">diff tool · $EDITOR · jj split</text>
+
+          <rect class="box" x="20" y="210" width="250" height="96" rx="12"/>
+          <text x="145" y="242" text-anchor="middle" font-weight="700">program restarts</text>
+          <text x="145" y="264" text-anchor="middle" class="lbl">with the saved state,</text>
+          <text x="145" y="284" text-anchor="middle" class="lbl">then refreshes the log</text>
+
+          <path class="arrow" d="M272 78 L586 78"/>
+          <text x="430" y="66" text-anchor="middle" class="lbl">app requests an interactive command</text>
+          <path class="arrow" d="M715 128 L715 206"/>
+          <text x="728" y="172" class="lbl">run cmd</text>
+          <path class="arrow" d="M588 258 L274 258"/>
+          <text x="430" y="248" text-anchor="middle" class="lbl">command exits</text>
+          <path class="arrow" d="M145 208 L145 130"/>
+          <text x="158" y="172" class="lbl">resume</text>
+        </svg>
+      </div>
+
+      <h3>App modes</h3>
+      <p class="muted"><code>jjtui.app</code> is a pure update function over a small state machine:</p>
+      <div class="modes"><code>:normal</code><code>:pick</code><code>:picker</code><code>:menu</code><code>:confirm</code><code>:input</code><code>:help</code></div>
+
+      <h3>Log parsing</h3>
+      <p>jjtui keeps jj's own graph rendering. The log template prepends hidden markers to each change's node line — <code>\x1d</code> + <code>\x1f</code>-separated fields + <code>\x1e</code> — and appends <code>\x1c</code>-marked file lines for expanded changes (<code>self.contained_in(&lt;expanded revset&gt;)</code>), so jj still draws the graph and <code>jjtui.log</code> only has to strip and parse the markers.</p>
+    </section>
+
+    <!-- ============ ROADMAP ============ -->
+    <section id="roadmap">
+      <div class="eyebrow">Project tracking</div>
+      <h2>Roadmap</h2>
+      <p class="muted">Driven by the <code>ROADMAP</code> array at the top of this page's script — edit it to update the board.</p>
+      <div class="progress" id="rmBar"></div>
+      <div class="legend" id="rmLegend"></div>
+      <div class="controls">
+        <div id="rmStatus" class="controls" style="margin:0"></div>
+        <select class="sel" id="rmArea" aria-label="Filter by area"></select>
+        <span style="flex:1"></span>
+        <div class="seg" role="group" aria-label="View"><button type="button" data-view="board">Board</button><button type="button" data-view="list">List</button></div>
+      </div>
+      <div id="rmOut"></div>
+    </section>
+
+    <footer>jjtui docs · single offline HTML file · no external assets</footer>
+  </main>
+</div>
+
+<script>
+'use strict';
+/* =====================================================================
+   ROADMAP — edit me. status: "done" | "in-progress" | "planned" | "idea"
+   ===================================================================== */
+const ROADMAP = [
+  { title: 'Log view', area: 'log', status: 'done', notes: "jj's own colored graph log with your templates.log; cursor = highlighted change block." },
+  { title: 'Marks', area: 'log', status: 'done', notes: 'm / space toggle, c / esc clear; ● gutter; batch semantics for enter, n, a, r, s, S, p, P.' },
+  { title: 'Inline file lists', area: 'log', status: 'done', notes: 'tab for the cursor change, shift+tab / i for all; file rows are selectable.' },
+  { title: 'Split diff pane', area: 'diff', status: 'done', notes: '| toggles; follows the cursor; J/K scroll, ctrl+f/ctrl+b page, < / > resize (5% steps, 20–80%).' },
+  { title: 'External diff tools + picker', area: 'diff', status: 'done', notes: 'enter opens the active tool (file row wins over marks); v picks among :diff-tools; {:cmd … :wait? true} map form.' },
+  { title: 'Branch diff picker', area: 'diff', status: 'done', notes: 'D: fuzzy bookmark picker, $revset = fork_point(trunk() | B)..B.' },
+  { title: 'Rebase pick mode', area: 'operations', status: 'done', notes: 'r: enter/o onto, a after, b before, s cycles -r → -s → -b.' },
+  { title: 'Squash', area: 'operations', status: 'done', notes: 's into parent or marks into cursor (--from "a | b"); S into a picked target. Background unless descriptions need combining.' },
+  { title: 'Describe via $EDITOR', area: 'operations', status: 'done', notes: 'd runs jj describe, suspending the TUI.' },
+  { title: 'New / N menu', area: 'operations', status: 'done', notes: 'n new (merge with marks); N: a insert after, b insert before, e toggle --no-edit.' },
+  { title: 'Abandon with confirm', area: 'operations', status: 'done', notes: 'a: confirm, then jj abandon X…' },
+  { title: 'Absorb', area: 'operations', status: 'done', notes: 'A: jj absorb --from X' },
+  { title: 'Split', area: 'operations', status: 'done', notes: 'X: jj split -r X (interactive).' },
+  { title: 'Undo / redo', area: 'operations', status: 'done', notes: 'u / U: jj undo / jj redo' },
+  { title: 'Bookmarks: set / create / delete / rename', area: 'bookmarks', status: 'done', notes: 'b fuzzy picker (set --allow-backwards or create); B menu: d delete, r rename.' },
+  { title: 'Push / fetch', area: 'remote', status: 'done', notes: 'p push -r, P push -c (new bookmark), f fetch.' },
+  { title: 'Ignore-immutable toggle', area: 'operations', status: 'done', notes: '! toggles --ignore-immutable for edit/rebase/squash/describe/abandon.' },
+  { title: 'Revset prompt', area: 'log', status: 'done', notes: 'L sets the log revset; empty resets to default.' },
+  { title: 'Config file', area: 'config', status: 'done', notes: '$XDG_CONFIG_HOME/jjtui/config.edn, $JJTUI_CONFIG or --config; #env reader.' },
+  { title: 'Help overlay', area: 'ui', status: 'done', notes: '? shows every binding.' },
+  { title: 'shift+tab toggles all files', area: 'log', status: 'done', notes: 'shift+tab is the primary key; i stays as an alias.' },
+  { title: 'jj integration test suite (bb test)', area: 'testing', status: 'done', notes: 'jj_test runs against real jj repos, next to the app, log and config tests.' },
+
+  { title: 'Op log view', area: 'history', status: 'planned', notes: 'Browse jj op log; undo the selected operation.' },
+  { title: 'Conflict navigation / resolution', area: 'operations', status: 'planned', notes: 'Jump between conflicted changes/files; launch jj resolve.' },
+  { title: 'File history', area: 'history', status: 'planned', notes: 'Log filtered to the file under the cursor.' },
+  { title: 'Open file at revision', area: 'diff', status: 'planned', notes: 'Open the selected file as of the cursor change in $EDITOR.' },
+  { title: 'Yank change id to clipboard', area: 'ui', status: 'planned', notes: 'Copy change / commit id of the cursor change.' },
+  { title: 'Configurable keymap', area: 'config', status: 'planned', notes: 'Remap keys from config.edn.' },
+  { title: 'Per-repo config', area: 'config', status: 'planned', notes: 'Repo-local overrides merged over the user config.' },
+  { title: 'Mouse support', area: 'ui', status: 'idea', notes: 'Click to move the cursor, scroll panes.' },
+  { title: 'Evolog view', area: 'history', status: 'idea', notes: 'jj evolog for the cursor change.' },
+  { title: 'Bookmark tracking / untracking', area: 'bookmarks', status: 'idea', notes: 'jj bookmark track / untrack for remote bookmarks.' },
+  { title: 'jj workspace switcher', area: 'workspace', status: 'idea', notes: 'List and switch between jj workspaces.' },
+];
+
+/* =====================================================================
+   KEYMAP — mirrors the spec; drives the reference tables and the mock's help overlay.
+   ===================================================================== */
+const KEYMAP = [
+  { id: 'nav', title: 'Navigation', rows: [
+    { k: 'j / ↓', d: 'next row (change or file)' },
+    { k: 'k / ↑', d: 'previous row' },
+    { k: 'g / G', d: 'first / last change' },
+    { k: 'ctrl+d / ctrl+u', d: 'half page down / up' },
+    { k: '@', d: 'jump to working copy' },
+    { k: 'q', d: 'quit' },
+    { k: '?', d: 'help' },
+    { k: 'R / ctrl+r', d: 'refresh' },
+  ]},
+  { id: 'view', title: 'View', rows: [
+    { k: 'tab', d: 'toggle inline file list of the change under cursor' },
+    { k: 'shift+tab / i', d: 'toggle inline file list for all changes' },
+    { k: '|', d: 'toggle split diff pane' },
+    { k: 'J / K', d: 'scroll diff pane down / up' },
+    { k: 'ctrl+f / ctrl+b', d: 'page diff pane down / up' },
+    { k: '< / >', d: 'shrink / grow the log pane (5% steps, 20–80%)' },
+    { k: 'L', d: 'set log revset (empty resets to default)' },
+  ]},
+  { id: 'diff', title: 'Diff', rows: [
+    { k: 'enter', d: 'open external diff: cursor change, or combined marked changes; on a file row only that file (even with marks)' },
+    { k: 'D', d: 'Diff a branch: fuzzy bookmark picker, diffs `fork_point(trunk() | B)` → `B` (whole branch, like a PR)' },
+    { k: 'v', d: 'pick the active external diff tool (from config)' },
+  ]},
+  { id: 'marks', title: 'Marks', sub: 'selection for batch operations', rows: [
+    { k: 'm / space', d: 'toggle mark on change, move down' },
+    { k: 'c', d: 'clear marks' },
+    { k: 'esc', d: 'clear marks (when no mode active)' },
+  ], note: 'Batch semantics: with marks, `enter` (combined diff), `n` (merge: new change with all marks as parents), `a` (abandon all), `r` (rebase marks), `s` (squash marks into cursor change), `S` (squash marks into picked target), `p`/`P` (push) operate on the marks; otherwise on the cursor change. Marks are cleared after mutating batch ops.' },
+  { id: 'ops', title: 'Change operations', sub: 'mnemonic', cols: ['Key', 'Mnemonic', 'jj command'], rows: [
+    { k: 'd', m: 'describe', d: '`jj describe -r X` (opens $EDITOR via jj)' },
+    { k: 'n', m: 'new', d: '`jj new X` / `jj new M1 M2 …`' },
+    { k: 'N', m: 'New…', d: 'menu: a = insert after (`-A`), b = insert before (`-B`), e = toggle `--no-edit`' },
+    { k: 'e', m: 'edit', d: '`jj edit X`' },
+    { k: 'a', m: 'abandon', d: 'confirm, `jj abandon X…`' },
+    { k: 'A', m: 'absorb', d: '`jj absorb --from X`' },
+    { k: 's', m: 'squash', d: 'no marks: `jj squash -r X` (into parent); marks: `jj squash --from "M1 | M2 …" --into X`. Runs in the background unless two descriptions need combining, then jj opens $EDITOR' },
+    { k: 'S', m: 'Squash into…', d: 'pick target, `jj squash --from X|"M1 | M2 …" --into T`' },
+    { k: 'r', m: 'rebase', d: 'pick destination mode: enter/o = onto (`-d`), a = after (`-A`), b = before (`-B`), s = cycle source mode `-r`→`-s`→`-b`' },
+    { k: 'X', m: 'split', d: '`jj split -r X` (interactive)' },
+    { k: 'u / U', m: 'undo / redo', d: '`jj undo` / `jj redo`' },
+    { k: 'b', m: 'bookmark', d: 'fuzzy picker of bookmarks; enter moves selected bookmark to X (`jj bookmark set --allow-backwards`), or creates the typed name (`jj bookmark create`; the "+ create" item is listed after the matches)' },
+    { k: 'B', m: 'Bookmark…', d: 'menu: d = delete (confirm), r = rename (prompt prefilled with the name); several bookmarks on X → picker first' },
+    { k: 'p', m: 'push', d: '`jj git push -r X…`' },
+    { k: 'P', m: 'Push new', d: '`jj git push -c X…` (creates bookmark from change id)' },
+    { k: 'f', m: 'fetch', d: '`jj git fetch`' },
+    { k: '!', m: 'force', d: 'toggle `--ignore-immutable` for edit/rebase/squash/describe/abandon (jjtui never blocks immutable changes itself; jj\'s error is shown)' },
+  ]},
+  { id: 'modal', title: 'Modal keys', cols: ['Key', 'Mode', 'Action'], rows: [
+    { k: 'j / k / g / G', m: 'Pick mode', d: 'move (rebase/squash target)' },
+    { k: 'enter', m: 'Pick mode', d: 'select' },
+    { k: 'esc', m: 'Pick mode', d: 'cancel' },
+    { k: 'type', m: 'Picker', d: 'filter (fuzzy)' },
+    { k: '↑ / ↓ or ctrl+n / ctrl+p', m: 'Picker', d: 'move' },
+    { k: 'enter', m: 'Picker', d: 'select' },
+    { k: 'esc', m: 'Picker', d: 'cancel' },
+    { k: 'single key', m: 'Menu', d: 'choose option' },
+    { k: 'esc / q', m: 'Menu', d: 'cancel' },
+    { k: 'y / enter', m: 'Confirm', d: 'yes' },
+    { k: 'n / esc', m: 'Confirm', d: 'no' },
+  ]},
+];
+
+/* =====================================================================
+   Config (defaults from src/jjtui/config.clj, annotated)
+   ===================================================================== */
+const PAGED_JJ = '["jj" "--config" "ui.paginate=auto" "--config" "ui.pager.command=[\\"less\\",\\"-R\\"]"';
+const PAGED_JJ_ARGV = ['jj', '--config', 'ui.paginate=auto', '--config', 'ui.pager.command=["less","-R"]'];
+const DEFAULT_CONFIG = [
+  '{;; external diff tool used by enter / D. One of the keys in :diff-tools',
+  ' :diff-tool :jj',
+  ' ;; named diff tools. String = run with `sh -c` (pipes ok, every substituted value shell-quoted).',
+  ' ;; Vector = argv, a "$files" element expands to zero or more args.',
+  ' ;; Map = {:cmd <string or vector> :wait? true}: "Press any key to return" afterwards (for tools that print and exit).',
+  ' ;; The jj-based defaults force paging through `less -R` so the output doesn\'t flash by when the TUI resumes.',
+  ' :diff-tools {:jj         ' + PAGED_JJ,
+  '                           "diff" "-r" "$revset" "$files"]',
+  '              :difftastic ' + PAGED_JJ,
+  '                           "diff" "--tool" "difft" "-r" "$revset" "$files"]',
+  '              :delta      "jj diff --git -r $revset $files | delta --paging=always"',
+  '              :diffview   ["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]',
+  '              :difftool   ["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]}',
+  ' ;; command for the split diff pane (stdout is captured, ANSI colors kept)',
+  ' :preview-command ["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]',
+  ' ;; examples:',
+  ' ;; :preview-command "DFT_WIDTH=$width DFT_COLOR=always jj diff --no-pager --tool difft -r $revset $files"',
+  ' ;; :preview-command "jj diff --no-pager --git -r $revset $files | delta --width=$width --side-by-side --paging=never"',
+  ' :revset nil          ; log revset, nil = jj\'s revsets.log',
+  ' :log-template nil    ; nil = jj\'s templates.log',
+  ' :show-files false    ; start with inline file lists expanded',
+  ' :split false         ; start with the diff pane open',
+  ' :split-ratio 0.5}    ; log pane share of the width',
+].join('\n');
+
+// example: true → shown in the docs tabs only, not part of the defaults (and not offered by the mock's `v` picker)
+const DIFF_TOOLS = {
+  jj:         { edn: PAGED_JJ + '\n             "diff" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '-r', '$revset', '$files']), note: "jj's built-in diff, honouring your ui.diff settings; paging forced through less -R." },
+  difftastic: { edn: PAGED_JJ + '\n             "diff" "--tool" "difft" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '--tool', 'difft', '-r', '$revset', '$files']), note: 'Structural diff via difftastic (needs the difft binary on PATH); paging forced through less -R.' },
+  delta:      { edn: '"jj diff --git -r $revset $files | delta --paging=always"', cmd: 'jj diff --git -r $revset $files | delta --paging=always', note: 'A string runs with sh -c, so pipes work; every substituted value is shell-quoted.' },
+  diffview:   { edn: '["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]', cmd: ['nvim', '-c', 'DiffviewOpen $from-sha..$to-sha'], note: 'Opens diffview.nvim. Requires a colocated git repo.' },
+  difftool:   { edn: '["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]', cmd: ['git', 'difftool', '--dir-diff', '$from-sha', '$to-sha', '--', '$files'], note: 'Your configured git difftool in dir-diff mode. Requires a colocated git repo.' },
+  'stat (map + :wait?)': { key: 'stat', example: true, wait: true, edn: '{:cmd ["jj" "diff" "--stat" "-r" "$revset" "$files"]\n                    :wait? true}', cmd: ['jj', 'diff', '--stat', '-r', '$revset', '$files'], note: 'Example, not a default. The map form adds :wait? true: the tool prints and exits, then jjtui shows "Press any key to return to jjtui" before resuming.' },
+};
+const PREVIEWS = {
+  'default (jj)': { edn: '["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]', cmd: ['jj', 'diff', '--no-pager', '--color=always', '-r', '$revset', '$files'] },
+  difftastic: { edn: '"DFT_WIDTH=$width DFT_COLOR=always jj diff --no-pager --tool difft -r $revset $files"', cmd: 'DFT_WIDTH=$width DFT_COLOR=always jj diff --no-pager --tool difft -r $revset $files' },
+  delta: { edn: '"jj diff --no-pager --git -r $revset $files | delta --width=$width --side-by-side --paging=never"', cmd: 'jj diff --no-pager --git -r $revset $files | delta --width=$width --side-by-side --paging=never' },
+};
+const CONFIG_KEYS = [
+  [':diff-tool', ':jj', 'External diff tool used by enter / D. One of the keys in :diff-tools.'],
+  [':diff-tools', '{:jj … :difftool …}', 'Named diff tools. String = run with `sh -c`; vector = argv with `"$files"` expanding to zero or more args; map = `{:cmd … :wait? true}` to wait for a key afterwards.'],
+  [':preview-command', '["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]', 'Command for the split diff pane (stdout is captured, ANSI colors kept).'],
+  [':revset', 'nil', "Log revset; nil = jj's `revsets.log`."],
+  [':log-template', 'nil', "nil = jj's `templates.log`."],
+  [':show-files', 'false', 'Start with inline file lists expanded.'],
+  [':split', 'false', 'Start with the diff pane open.'],
+  [':split-ratio', '0.5', 'Log pane share of the width (`<` / `>` step 5%, clamped to 20–80%).'],
+];
+const MODULES = [
+  ['jjtui.main', 'CLI args, config, outer loop: runs the charm program; when the app requests an interactive command the program exits, the command runs with inherited stdio (waiting for a key on `:wait?` or a non-zero exit), then the program restarts with the saved state.'],
+  ['jjtui.app', 'The state machine. `update-state` is pure: state + message → [state effects], so every flow is testable without a terminal or a repo.'],
+  ['jjtui.effects', 'Turns the effect maps returned by jjtui.app into charm commands — the only place the running program does I/O.'],
+  ['jjtui.jj', 'Runs jj (process wrappers); command construction lives in jjtui.app and jjtui.log.'],
+  ['jjtui.log', 'Builds the `jj log` template and parses its output into display rows; jj still draws the graph.'],
+  ['jjtui.config', 'Defaults, config file loading (EDN, `#env`), command templating.'],
+  ['jjtui.keys', 'Key names and the normal-mode keymap, which is also the source of the help screen.'],
+  ['jjtui.state', 'Read-only queries on the app state, shared by jjtui.app and jjtui.view.'],
+  ['jjtui.view', 'Renders the state to a string with charm styles; layout helpers are shared with jjtui.app so scrolling and drawing agree.'],
+];
+
+/* =====================================================================
+   helpers
+   ===================================================================== */
+const $ = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const md = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+const span = (cls, s) => '<span class="' + cls + '">' + s + '</span>';
+
+function kbdify(k, hl) {
+  return k.split(/( \/ | or )/).map(part => {
+    if (part === ' / ') return ' / ';
+    if (part === ' or ') return ' or ';
+    if (part === 'type' || part === 'single key') return '<i>' + hi(part, hl) + '</i>';
+    return part.split(/(\s+)/).map(p => /^\s+$/.test(p) || !p ? p : '<kbd>' + hi(p, hl) + '</kbd>').join('');
+  }).join('');
+}
+function hi(text, q) { // escape + highlight query
+  const e = esc(text);
+  if (!q) return e;
+  const qe = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return e.replace(new RegExp(qe, 'gi'), m => '<mark>' + m + '</mark>');
+}
+function mdHi(s, q) {
+  return s.split(/(`[^`]+`)/).map(part => part.startsWith('`') && part.endsWith('`') && part.length > 1
+    ? '<code>' + hi(part.slice(1, -1), q) + '</code>' : hi(part, q)).join('');
+}
+
+function highlightClj(src) {
+  const re = /(;.*$)|("(?:[^"\\]|\\.)*")|(:[\w\-\/.?!*]+)|\b(nil|true|false)\b|(-?\b\d+(?:\.\d+)?\b)/gm;
+  let out = '', last = 0, m;
+  while ((m = re.exec(src))) {
+    out += esc(src.slice(last, m.index));
+    if (m[1]) out += span('tok-com', esc(m[1]));
+    else if (m[2]) out += span('tok-str', esc(m[2]).replace(/\$[a-z-]+/g, v => span('tok-var', v)));
+    else if (m[3]) out += span('tok-kw', esc(m[3]));
+    else if (m[4]) out += span('tok-num', m[4]);
+    else out += span('tok-num', m[5]);
+    last = re.lastIndex;
+  }
+  return out + esc(src.slice(last));
+}
+function highlightSh(src) {
+  return src.split('\n').map(line => {
+    const i = line.indexOf('#');
+    const code = i >= 0 ? line.slice(0, i) : line, com = i >= 0 ? line.slice(i) : '';
+    return esc(code).replace(/\$[\w(][\w\-)]*/g, v => span('tok-var', v)) + (com ? span('tok-com', esc(com)) : '');
+  }).join('\n');
+}
+
+// command templating (mirrors jjtui.config/render-command). String templates run via `sh -c` with every
+// substituted value shell-quoted; vector templates are argv (shown here quoted only where a shell would need it).
+const shellQuote = s => "'" + s.replace(/'/g, "'\\''") + "'";
+const shq = s => s === '' ? "''" : /^[A-Za-z0-9_\/.,:=@%+\-]+$/.test(s) ? s : shellQuote(s);
+function renderCmd(cmd, vars) {
+  const sub = (s, quote) => s.replace(/\$(from-sha|to-sha|revset|files|width|repo)/g, (whole, k) => {
+    const q = quote ? shellQuote : (x => x);
+    if (k === 'files') return vars.files.map(q).join(' ');
+    return vars[k] == null ? whole : q(String(vars[k]));
+  });
+  if (Array.isArray(cmd)) {
+    const argv = [];
+    cmd.forEach(a => { if (a === '$files') argv.push(...vars.files); else argv.push(sub(a, false)); });
+    return argv.map(shq).join(' ');
+  }
+  return sub(cmd, true).replace(/ {2,}/g, ' ').trim();
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e2) {}
+    ta.remove(); return ok;
+  }
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest('.copy');
+  if (!b) return;
+  const pre = b.parentElement.querySelector('pre');
+  const ok = await copyText(pre ? pre.textContent : '');
+  b.textContent = ok ? 'Copied ✓' : 'Copy failed';
+  b.classList.toggle('ok', ok);
+  setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('ok'); }, 1400);
+});
+
+/* =====================================================================
+   theme
+   ===================================================================== */
+(function theme() {
+  const root = document.documentElement;
+  const sync = () => {
+    const dark = root.getAttribute('data-theme') === 'dark';
+    $('#themeIcon').textContent = dark ? '☀' : '☾';
+    $('#themeLabel').textContent = dark ? 'Light' : 'Dark';
+  };
+  $('#themeBtn').addEventListener('click', () => {
+    const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('jjtui-theme', next); } catch (e) {}
+    sync();
+  });
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = ev => {
+      let stored = null; try { stored = localStorage.getItem('jjtui-theme'); } catch (e) {}
+      if (!stored) { root.setAttribute('data-theme', ev.matches ? 'dark' : 'light'); sync(); }
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange); else if (mq.addListener) mq.addListener(onChange);
+  }
+  sync();
+})();
+
+/* nav: active section */
+(function navSpy() {
+  const links = $$('nav.side a.nav');
+  const byId = {}; links.forEach(a => { byId[a.getAttribute('href').slice(1)] = a; });
+  if (!('IntersectionObserver' in window)) return;
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(en => {
+      if (en.isIntersecting) { links.forEach(a => a.classList.remove('active')); const a = byId[en.target.id]; if (a) a.classList.add('active'); }
+    });
+  }, { rootMargin: '-35% 0px -60% 0px' });
+  $$('main section').forEach(s => io.observe(s));
+})();
+
+/* shell snippets */
+$$('pre[data-sh]').forEach(p => { p.innerHTML = highlightSh(p.textContent); });
+
+/* =====================================================================
+   keybinding reference
+   ===================================================================== */
+(function keyRef() {
+  let group = 'all', q = '';
+  const chips = $('#keyChips'), out = $('#keyTables'), input = $('#keySearch');
+  function drawChips() {
+    chips.innerHTML = [['all', 'All']].concat(KEYMAP.map(g => [g.id, g.title])).map(([id, t]) =>
+      '<button type="button" class="chip' + (group === id ? ' on' : '') + '" data-g="' + id + '">' + esc(t) + '</button>').join('');
+  }
+  function draw() {
+    const ql = q.trim().toLowerCase();
+    let any = false;
+    out.innerHTML = KEYMAP.filter(g => group === 'all' || g.id === group).map(g => {
+      const rows = g.rows.filter(r => !ql || (r.k + ' ' + (r.m || '') + ' ' + r.d).toLowerCase().includes(ql));
+      if (!rows.length) return '';
+      any = true;
+      const cols = g.cols || ['Key', 'Action'];
+      const qq = q.trim();
+      return '<h3>' + esc(g.title) + (g.sub ? ' <span class="muted" style="font-weight:400">— ' + esc(g.sub) + '</span>' : '') + '</h3>' +
+        '<table class="t"><thead><tr>' + cols.map(c => '<th>' + c + '</th>').join('') + '</tr></thead><tbody>' +
+        rows.map(r => '<tr><td class="k">' + kbdify(r.k, qq) + '</td>' + (g.cols ? '<td class="mn">' + hi(r.m, qq) + '</td>' : '') + '<td>' + mdHi(r.d, qq) + '</td></tr>').join('') +
+        '</tbody></table>' + (g.note && !ql ? '<div class="note">' + md(g.note) + '</div>' : '');
+    }).join('');
+    $('#keyEmpty').hidden = any;
+  }
+  chips.addEventListener('click', e => { const b = e.target.closest('.chip'); if (!b) return; group = b.dataset.g; drawChips(); draw(); });
+  input.addEventListener('input', () => { q = input.value; draw(); });
+  document.addEventListener('keydown', e => {
+    if (e.key !== '/' || e.ctrlKey || e.metaKey) return;
+    const t = document.activeElement;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.id === 'term')) return;
+    e.preventDefault(); input.focus(); input.select();
+  });
+  drawChips(); draw();
+})();
+
+/* =====================================================================
+   configuration
+   ===================================================================== */
+(function config() {
+  $('#cfgDefault').innerHTML = highlightClj(DEFAULT_CONFIG);
+  $('#cfgKeys tbody').innerHTML = CONFIG_KEYS.map(([k, d, m]) =>
+    '<tr><td class="k"><code>' + esc(k) + '</code></td><td><code>' + esc(d) + '</code></td><td>' + md(m) + '</td></tr>').join('');
+
+  // example selection: cursor on file row src/jjtui/login.clj of change kxryzmor
+  const exVars = { 'from-sha': 'c41d07e3', 'to-sha': '9b1e44a2', revset: 'kxryzmor', files: ['src/jjtui/login.clj'], width: 96, repo: '~/code/jjtui-demo' };
+  const exVarsWhole = Object.assign({}, exVars, { files: [] });
+
+  function tabs(tabsEl, panelEl, entries, body) {
+    let cur = Object.keys(entries)[0];
+    function draw() {
+      tabsEl.innerHTML = Object.keys(entries).map(n => '<button type="button" role="tab" class="' + (n === cur ? 'on' : '') + '" data-n="' + esc(n) + '">' + esc(n) + '</button>').join('');
+      panelEl.innerHTML = body(cur, entries[cur]);
+    }
+    tabsEl.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; cur = b.dataset.n; draw(); });
+    draw();
+  }
+  const codeBlock = (label, html) => '<div class="code"><div class="label">' + label + '</div><button class="copy" type="button">Copy</button><pre>' + html + '</pre></div>';
+
+  const exBranch = { 'from-sha': '51b0e8f6', 'to-sha': '9b1e44a2', revset: 'fork_point(trunk() | feature/login)..feature/login', files: [], width: 96, repo: '~/code/jjtui-demo' };
+  const shown = (t, vars) => highlightSh(Array.isArray(t.cmd) ? renderCmd(t.cmd, vars) : 'sh -c ' + shellQuote(renderCmd(t.cmd, vars)));
+  tabs($('#toolTabs'), $('#toolPanel'), DIFF_TOOLS, (name, t) =>
+    codeBlock('config.edn', highlightClj('{:diff-tool :' + (t.key || name) + '\n :diff-tools {:' + (t.key || name) + ' ' + t.edn + '}}')) +
+    '<p class="muted">' + esc(t.note) + ' Kind: <b>' + (t.wait ? 'map {:cmd vector :wait? true}' : Array.isArray(t.cmd) ? 'vector (argv)' : 'string (sh -c)') + '</b>.</p>' +
+    codeBlock('enter on file row src/jjtui/login.clj of kxryzmor runs', shown(t, exVars)) +
+    codeBlock('enter on the change kxryzmor runs', shown(t, exVarsWhole)) +
+    codeBlock('D → feature/login runs', shown(t, exBranch)));
+
+  tabs($('#prevTabs'), $('#prevPanel'), PREVIEWS, (name, p) =>
+    codeBlock('config.edn', highlightClj('{:preview-command ' + p.edn + '}')) +
+    codeBlock('cursor on kxryzmor, pane width 96 → runs', shown(p, exVarsWhole)));
+})();
+
+/* architecture modules */
+$('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) + '</h4><p>' + md(d) + '</p></div>').join('');
+
+/* =====================================================================
+   roadmap
+   ===================================================================== */
+(function roadmap() {
+  const STATUSES = [['done', 'Done', 'var(--done)'], ['in-progress', 'In progress', 'var(--prog)'], ['planned', 'Planned', 'var(--plan)'], ['idea', 'Idea', 'var(--idea)']];
+  const color = s => (STATUSES.find(x => x[0] === s) || [0, 0, 'var(--border)'])[2];
+  const label = s => (STATUSES.find(x => x[0] === s) || [0, s])[1];
+  let st = 'all', area = 'all', view = 'board';
+  try { view = localStorage.getItem('jjtui-roadmap-view') || 'board'; } catch (e) {}
+  const areas = Array.from(new Set(ROADMAP.map(i => i.area))).sort();
+  $('#rmArea').innerHTML = '<option value="all">All areas</option>' + areas.map(a => '<option value="' + esc(a) + '">' + esc(a) + '</option>').join('');
+
+  function draw() {
+    const total = ROADMAP.length || 1;
+    const count = s => ROADMAP.filter(i => i.status === s).length;
+    const pct = Math.round(count('done') / total * 100);
+    $('#rmBar').innerHTML = STATUSES.map(([s, , c]) => '<div title="' + label(s) + ': ' + count(s) + '" style="width:' + (count(s) / total * 100) + '%;background:' + c + '"></div>').join('');
+    $('#rmLegend').innerHTML = '<b style="color:var(--fg)">' + pct + '% done</b> (' + count('done') + ' / ' + ROADMAP.length + ')' +
+      STATUSES.map(([s, l, c]) => '<span><i style="background:' + c + '"></i>' + l + ' ' + count(s) + '</span>').join('');
+    $('#rmStatus').innerHTML = [['all', 'All']].concat(STATUSES.map(x => [x[0], x[1]])).map(([s, l]) =>
+      '<button type="button" class="chip' + (st === s ? ' on' : '') + '" data-s="' + s + '">' + l + '<span class="n">' + (s === 'all' ? ROADMAP.length : count(s)) + '</span></button>').join('');
+    $$('.seg button[data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+    const items = ROADMAP.filter(i => (st === 'all' || i.status === st) && (area === 'all' || i.area === area));
+    const card = i => '<div class="card" style="--st:' + color(i.status) + '"><div class="ti">' + esc(i.title) + '</div>' + (i.notes ? '<div class="no">' + esc(i.notes) + '</div>' : '') + '<span class="area">' + esc(i.area) + '</span></div>';
+    if (view === 'board') {
+      const cols = STATUSES.filter(([s]) => st === 'all' || st === s);
+      $('#rmOut').innerHTML = '<div class="board" style="' + (cols.length === 1 ? 'grid-template-columns:minmax(0,1fr)' : '') + '">' + cols.map(([s, l, c]) => {
+        const its = items.filter(i => i.status === s);
+        return '<div class="col"><h4><i style="width:9px;height:9px;border-radius:50%;background:' + c + ';display:inline-block"></i>' + l + '<span class="cnt">' + its.length + '</span></h4>' +
+          (its.length ? its.map(card).join('') : '<div class="empty">Nothing here' + (s === 'in-progress' ? ' — pick something from Planned' : '') + '.</div>') + '</div>';
+      }).join('') + '</div>';
+    } else {
+      $('#rmOut').innerHTML = items.length ? '<table class="t"><thead><tr><th>Status</th><th>Title</th><th>Area</th><th>Notes</th></tr></thead><tbody>' +
+        items.map(i => '<tr><td class="k"><span class="pill" style="background:' + color(i.status) + '">' + esc(label(i.status)) + '</span></td><td><b>' + esc(i.title) + '</b></td><td class="k"><span class="area" style="margin:0">' + esc(i.area) + '</span></td><td class="muted">' + esc(i.notes || '') + '</td></tr>').join('') +
+        '</tbody></table>' : '<div class="empty">No items match.</div>';
+    }
+  }
+  $('#rmStatus').addEventListener('click', e => { const b = e.target.closest('.chip'); if (b) { st = b.dataset.s; draw(); } });
+  $('#rmArea').addEventListener('change', e => { area = e.target.value; draw(); });
+  $$('.seg button[data-view]').forEach(b => b.addEventListener('click', () => {
+    view = b.dataset.view; try { localStorage.setItem('jjtui-roadmap-view', view); } catch (e) {} draw();
+  }));
+  draw();
+})();
+
+/* =====================================================================
+   terminal mock
+   ===================================================================== */
+(function mock() {
+  // index 0 = newest. parent = index into CH (null = root()).
+  const CH = [
+    { id: 'qpvuntsm', sha: '3f2a91c0', time: '2026-11-07 14:02', desc: '', wc: true, bm: [], g1: '@  ', g2: '│  ', parent: 1,
+      files: [['M', 'src/jjtui/view.clj']] },
+    { id: 'kxryzmor', sha: '9b1e44a2', time: '2026-11-07 13:40', desc: 'login: validate form fields', bm: ['feature/login'], g1: '○  ', g2: '│  ', parent: 2,
+      files: [['A', 'src/jjtui/login.clj'], ['M', 'src/jjtui/app.clj']] },
+    { id: 'vruxwmqv', sha: 'c41d07e3', time: '2026-11-07 12:15', desc: 'login: add session store', bm: [], g1: '○  ', g2: '│  ', parent: 4,
+      files: [['A', 'src/jjtui/session.clj'], ['M', 'deps.edn']] },
+    { id: 'tlmrqvwn', sha: '7d2c5a19', time: '2026-11-07 11:58', desc: 'docs: document config.edn', bm: ['feature/docs'], g1: '│ ○  ', g2: '│ │  ', tail: '├─╯', parent: 4,
+      files: [['M', 'README.md'], ['A', 'docs/config.md']] },
+    { id: 'zsuskuln', sha: '51b0e8f6', time: '2026-11-06 18:21', desc: 'view: split diff pane', bm: ['main'], imm: true, g1: '◆  ', g2: '│  ', parent: 5,
+      files: [['M', 'src/jjtui/view.clj'], ['M', 'src/jjtui/app.clj'], ['D', 'src/jjtui/layout.clj']] },
+    { id: 'royxmykx', sha: '0a9c3d21', time: '2026-11-06 10:05', desc: 'log: parse graph markers', bm: ['v0.1'], imm: true, g1: '◆  ', g2: '│  ', parent: 6,
+      files: [['R', 'src/jjtui/log.clj', 'src/jjtui/{parse.clj → log.clj}'], ['A', 'test/jjtui/log_test.clj']] },
+    { id: 'wqnwkozp', sha: 'e8b47f10', time: '2026-11-05 09:30', desc: 'initial bb project', bm: [], imm: true, g1: '◆  ', g2: '│  ', tail: '~', parent: null,
+      files: [['A', 'bb.edn'], ['A', 'bin/jjtui'], ['A', 'src/jjtui/main.clj']] },
+  ];
+  const AUTHOR = 'yann@jj.dev';
+  const DIFFS = {
+    'qpvuntsm:src/jjtui/view.clj': [40, ' (defn status-bar [state]', '-  (str (mode-label state)))', '+  (str (mode-label state) " " (marks-label state)', '+       (when (:ignore-immutable? state) " !")))'],
+    'kxryzmor:src/jjtui/login.clj': [1, '+(ns jjtui.login', '+  (:require [clojure.string :as str]))', '+', '+(defn validate [{:keys [user password]}]', '+  (cond-> {}', '+    (str/blank? user)      (assoc :user "required")', '+    (< (count password) 8) (assoc :password "too short")))'],
+    'kxryzmor:src/jjtui/app.clj': [88, '   (case (:mode state)', '-    :login (login state msg)', '+    :login (-> (login state msg)', '+               (assoc :errors (login/validate (:form state))))', '     state))'],
+    'vruxwmqv:src/jjtui/session.clj': [1, '+(ns jjtui.session)', '+', '+(defonce store (atom {}))', '+', '+(defn put! [k v] (swap! store assoc k v))'],
+    'vruxwmqv:deps.edn': [1, ' {:paths ["src"]', '- :deps {}}', '+ :deps {buddy/buddy-hashers {:mvn/version "2.0.167"}}}'],
+    'tlmrqvwn:README.md': [12, ' ## Configuration', '-See the source.', '+jjtui reads `~/.config/jjtui/config.edn`.', '+See docs/config.md for all keys.'],
+    'tlmrqvwn:docs/config.md': [1, '+# config.edn', '+', '+| key          | default |', '+|--------------|---------|', '+| :diff-tool   | :jj     |', '+| :split-ratio | 0.5     |'],
+    'zsuskuln:src/jjtui/view.clj': [61, ' (defn view [state]', '-  (log-pane state))', '+  (if (:split state)', '+    (h-join (log-pane state) (diff-pane state))', '+    (log-pane state)))'],
+    'zsuskuln:src/jjtui/app.clj': [120, '   "|" (update state :split not)', '+  "<" (update state :split-ratio #(max 0.2 (- % 0.05)))', '+  ">" (update state :split-ratio #(min 0.8 (+ % 0.05)))'],
+    'zsuskuln:src/jjtui/layout.clj': [1, '-(ns jjtui.layout)', '-', '-(defn columns [& panes] panes)'],
+    'royxmykx:src/jjtui/log.clj': [1, '-(ns jjtui.parse', '+(ns jjtui.log', '   (:require [clojure.string :as str]))'],
+    'royxmykx:test/jjtui/log_test.clj': [1, '+(ns jjtui.log-test', '+  (:require [clojure.test :refer [deftest is]]', '+            [jjtui.log :as log]))', '+', '+(deftest parse-sample', '+  (is (= 7 (count (log/parse sample)))))'],
+    'wqnwkozp:bb.edn': [1, '+{:paths ["src" "test"]', '+ :tasks {run  (shell "bin/jjtui")', '+         test (load-file "test/runner.clj")}}'],
+    'wqnwkozp:bin/jjtui': [1, '+#!/usr/bin/env bb', "+(require '[jjtui.main :as main])", '+(apply main/-main *command-line-args*)'],
+    'wqnwkozp:src/jjtui/main.clj': [1, '+(ns jjtui.main)', '+', '+(defn -main [& args]', '+  (println "hello jj"))'],
+  };
+  const TOOLS = Object.keys(DIFF_TOOLS).filter(t => !DIFF_TOOLS[t].example);
+  const PAGE = 6;
+
+  const S = {
+    cur: { ci: 0, fi: -1 }, marks: new Set(), expanded: new Set(), split: false, ratio: 0.5,
+    help: false, mode: 'normal', pick: null, picker: null, menu: null, confirm: null, input: null,
+    ignoreImm: false, revset: null, tool: 'jj', msg: { text: 'press ? for help', kind: '' }, busy: false, noEdit: false,
+  };
+  const term = $('#term'), logEl = $('#tLog'), diffEl = $('#tDiff'), panelEl = $('#tPanel'), statusEl = $('#tStatus'),
+        helpEl = $('#tHelp'), suspEl = $('#tSusp');
+
+  /* ---- model helpers ---- */
+  const rows = () => {
+    const r = [];
+    CH.forEach((c, ci) => { r.push({ ci, fi: -1 }); if (S.expanded.has(ci)) c.files.forEach((f, fi) => r.push({ ci, fi })); });
+    return r;
+  };
+  const rowIndex = () => rows().findIndex(r => r.ci === S.cur.ci && r.fi === S.cur.fi);
+  function move(d) { const r = rows(); const i = Math.max(0, Math.min(r.length - 1, rowIndex() + d)); S.cur = Object.assign({}, r[i]); }
+  function moveChange(d) { S.cur = { ci: Math.max(0, Math.min(CH.length - 1, S.cur.ci + d)), fi: -1 }; }
+  const parentSha = c => c.parent == null ? '00000000' : CH[c.parent].sha;
+  const targets = () => S.marks.size ? Array.from(S.marks).sort((a, b) => a - b) : [S.cur.ci];
+  const ids = idx => idx.map(i => CH[i].id);
+  const ii = () => S.ignoreImm ? ' --ignore-immutable' : '';
+  const msg = (text, kind) => { S.msg = { text, kind: kind || '' }; };
+  // jjtui never blocks immutable changes itself: jj refuses, and the error lands in the message area.
+  const immutableIn = idx => S.ignoreImm ? null : (idx.map(i => CH[i]).find(c => c && c.imm) || null);
+  const revsetArg = idx => idx.length === 1 ? CH[idx[0]].id : '"' + ids(idx).join(' | ') + '"';
+  const usesVar = (cmd, v) => (Array.isArray(cmd) ? cmd.join(' ') : cmd).includes('$' + v);
+  function selectionVars() {
+    const base = { width: 96, repo: '~/code/jjtui-demo' };
+    // a file row wins over marks: diff only that file of the cursor change
+    if (S.cur.fi >= 0 || !S.marks.size) {
+      const c = CH[S.cur.ci];
+      return Object.assign(base, { 'from-sha': parentSha(c), 'to-sha': c.sha, revset: c.id, files: S.cur.fi >= 0 ? [c.files[S.cur.fi][1]] : [] });
+    }
+    // marks: $revset = marked commit ids; $from-sha/$to-sha resolved via jj, needs a single root and head
+    const idx = targets(), set = new Set(idx);
+    const heads = idx.filter(i => !idx.some(j => j !== i && ancestors(j).includes(i)));
+    const roots = idx.filter(i => !ancestors(i).slice(1).some(a => set.has(a)));
+    const v = Object.assign(base, { revset: idx.map(i => CH[i].sha).join(' | '), files: [] });
+    if (roots.length === 1 && heads.length === 1) { v['from-sha'] = parentSha(CH[roots[0]]); v['to-sha'] = CH[heads[0]].sha; }
+    return v;
+  }
+  function openDiff(vars) {
+    const t = DIFF_TOOLS[S.tool];
+    if ((usesVar(t.cmd, 'from-sha') || usesVar(t.cmd, 'to-sha')) && !vars['from-sha']) {
+      msg('Error: ' + S.tool + ' needs $from-sha/$to-sha, but the marks have more than one root or head', 'err'); return;
+    }
+    run(renderCmd(t.cmd, vars), { interactive: true, wait: t.wait });
+  }
+  function ancestors(i) { const a = []; for (let x = i; x != null; x = CH[x].parent) a.push(x); return a; }
+  const bookmarks = () => { const out = []; CH.forEach((c, ci) => c.bm.forEach(b => out.push({ name: b, ci }))); return out; };
+
+  /* ---- running commands ----
+     o.interactive: suspend the TUI; o.wait: "Press any key" afterwards; o.touched: change indexes jj would rewrite;
+     o.after: state update on success (e.g. clearing marks). */
+  let suspTimers = [], lastCmd = '';
+  function run(cmd, o) {
+    o = o || {};
+    lastCmd = cmd;
+    const bad = o.touched ? immutableIn(o.touched) : null;
+    const err = bad ? 'Error: Commit ' + bad.sha + ' is immutable' : null;
+    S.suspErr = err;
+    if (!o.interactive) {
+      if (err) { msg('✗ ' + cmd + ' — ' + err + ' (! adds --ignore-immutable)', 'err'); return; }
+      if (o.after) o.after();
+      msg('✓ ' + cmd, 'ok'); return;
+    }
+    if (!err && o.after) o.after();
+    S.busy = true;
+    const pressKey = '\n\n' + span('c-dim', 'Press any key to return to jjtui');
+    const lines = [span('c-dim', '── charm program exited · terminal restored ──'), '', span('c-dim', '$ ' + esc(cmd)), ''];
+    if (err) lines.push(span('c-red', esc(err)), span('c-gry', 'Hint: Pass `--ignore-immutable` or configure the set of immutable commits via `revset-aliases.immutable_heads()`.'));
+    else lines.push(span('c-gry', '(the command now owns the real terminal with inherited stdio —'), span('c-gry', ' your diff tool, $EDITOR or jj split UI would be running here)'));
+    suspEl.innerHTML = lines.join('\n');
+    suspEl.classList.add('show');
+    if (err) { suspTimers.push(setTimeout(() => { suspEl.innerHTML += '\n\n' + span('c-dim', '── command exited 1 ──') + pressKey; }, 500)); return; }
+    suspTimers.push(setTimeout(() => {
+      suspEl.innerHTML += '\n\n' + span('c-dim', '── command exited 0 ──') + (o.wait ? pressKey : '\n' + span('c-dim', '── restarting program with saved state ──'));
+    }, 1100));
+    if (!o.wait) suspTimers.push(setTimeout(() => resume(cmd), 1900));
+  }
+  function resume(cmd) {
+    suspTimers.forEach(clearTimeout); suspTimers = [];
+    suspEl.classList.remove('show');
+    S.busy = false;
+    if (S.suspErr) msg('✗ ' + cmd + ' — ' + S.suspErr + ' (! adds --ignore-immutable)', 'err');
+    else msg('↻ resumed after: ' + cmd, 'ok');
+    render();
+  }
+
+  /* ---- modes ---- */
+  function openPicker(title, items, onSelect, allowCreate) {
+    S.mode = 'picker'; S.picker = { title, items, query: '', sel: 0, onSelect, allowCreate };
+  }
+  function pickerMatches() {
+    const p = S.picker, q = p.query.toLowerCase();
+    const res = [];
+    p.items.forEach(it => {
+      const s = it.label, sl = s.toLowerCase();
+      let j = 0, pos = [], score = 0, prev = -2;
+      for (let i = 0; i < sl.length && j < q.length; i++) if (sl[i] === q[j]) { pos.push(i); score += (i === prev + 1 ? 2 : 0) - i * 0.01; prev = i; j++; }
+      if (j === q.length) res.push({ it, pos, score });
+    });
+    if (q) res.sort((a, b) => b.score - a.score);
+    if (p.allowCreate && p.query && !p.items.some(it => it.label === p.query)) res.push({ it: { label: p.query, create: true }, pos: [], score: -1e9 });
+    return res;
+  }
+  function openMenu(title, opts) { S.mode = 'menu'; S.menu = { title, opts }; }
+  function closeModal() { S.mode = 'normal'; S.pick = S.picker = S.menu = S.confirm = S.input = null; }
+
+  /* ---- key handling ---- */
+  function normal(key) {
+    const c = CH[S.cur.ci];
+    switch (key) {
+      case 'j': case '↓': move(1); break;
+      case 'k': case '↑': move(-1); break;
+      case 'g': S.cur = { ci: 0, fi: -1 }; break;
+      case 'G': S.cur = { ci: CH.length - 1, fi: -1 }; break;
+      case 'ctrl+d': move(PAGE); break;
+      case 'ctrl+u': move(-PAGE); break;
+      case '@': S.cur = { ci: CH.findIndex(x => x.wc), fi: -1 }; break;
+      case 'q': msg('q quits jjtui (disabled in this demo)'); break;
+      case '?': S.help = true; break;
+      case 'R': case 'ctrl+r': msg('refreshed'); break;
+      case 'tab':
+        if (S.expanded.has(S.cur.ci)) S.expanded.delete(S.cur.ci); else S.expanded.add(S.cur.ci);
+        S.cur.fi = -1; break;
+      case 'shift+tab': case 'i':
+        if (S.expanded.size === CH.length) S.expanded.clear(); else CH.forEach((_, i) => S.expanded.add(i));
+        S.cur.fi = -1; break;
+      case '|': S.split = !S.split; break;
+      case 'J': diffEl.scrollTop += 40; return false;
+      case 'K': diffEl.scrollTop -= 40; return false;
+      case 'ctrl+f': diffEl.scrollTop += diffEl.clientHeight - 30; return false;
+      case 'ctrl+b': diffEl.scrollTop -= diffEl.clientHeight - 30; return false;
+      case '<': S.ratio = Math.max(0.2, +(S.ratio - 0.05).toFixed(2)); if (!S.split) msg('log pane: ' + Math.round(S.ratio * 100) + '% (open the diff pane with |)'); break;
+      case '>': S.ratio = Math.min(0.8, +(S.ratio + 0.05).toFixed(2)); if (!S.split) msg('log pane: ' + Math.round(S.ratio * 100) + '% (open the diff pane with |)'); break;
+      case 'L': S.mode = 'input'; S.input = { prompt: 'revset (empty = default): ', value: S.revset || '', onSubmit: v => { S.revset = v.trim() || null; msg('revset: ' + (S.revset || 'default')); } }; break;
+      case 'enter': openDiff(selectionVars()); break;
+      case 'D': openPicker('Diff a branch', bookmarks().map(b => ({ label: b.name, ci: b.ci })), it => {
+        const trunk = CH.findIndex(x => x.bm.includes('main'));
+        const ta = ancestors(trunk);
+        const fork = ancestors(it.ci).find(x => ta.includes(x));
+        openDiff({ 'from-sha': CH[fork].sha, 'to-sha': CH[it.ci].sha, revset: 'fork_point(trunk() | ' + it.label + ')..' + it.label, files: [], width: 96, repo: '~/code/jjtui-demo' });
+      }); break;
+      case 'v': openPicker('Diff tool', TOOLS.map(t => ({ label: t })), it => { S.tool = it.label; msg('diff tool: ' + it.label); }); break;
+      case 'm': case 'space':
+        if (S.marks.has(S.cur.ci)) S.marks.delete(S.cur.ci); else S.marks.add(S.cur.ci);
+        move(1); break;
+      case 'c': S.marks.clear(); msg('marks cleared'); break;
+      case 'esc': if (S.marks.size) { S.marks.clear(); msg('marks cleared'); } break;
+      case 'd': run('jj describe -r ' + c.id + ii(), { interactive: true, touched: [S.cur.ci] }); break;
+      case 'n': { const t = targets(); run('jj new ' + ids(t).join(' '), { after: () => S.marks.clear() }); break; }
+      case 'N': openMenu('New…', () => [
+        ['a', 'insert after (-A)', () => run('jj new -A ' + ids(targets()).join(' ') + (S.noEdit ? ' --no-edit' : ''), { after: () => S.marks.clear() })],
+        ['b', 'insert before (-B)', () => run('jj new -B ' + ids(targets()).join(' ') + (S.noEdit ? ' --no-edit' : ''), { after: () => S.marks.clear() })],
+        ['e', 'toggle --no-edit [' + (S.noEdit ? 'on' : 'off') + ']', () => { S.noEdit = !S.noEdit; return 'stay'; }],
+      ]); break;
+      case 'e': run('jj edit ' + c.id + ii(), { touched: [S.cur.ci] }); break;
+      case 'a': { const t = targets();
+        S.mode = 'confirm'; S.confirm = { text: 'Abandon ' + ids(t).join(', ') + '?', yes: () => run('jj abandon ' + ids(t).join(' ') + ii(), { touched: t, after: () => S.marks.clear() }) }; break; }
+      case 'A': run('jj absorb --from ' + c.id, {}); break;
+      case 's':
+        if (!S.marks.size) squash('jj squash -r ' + c.id + ii(), [S.cur.ci, c.parent].filter(x => x != null));
+        else { const t = targets().filter(i => i !== S.cur.ci); if (t.length) squash('jj squash --from ' + revsetArg(t) + ' --into ' + c.id + ii(), t.concat([S.cur.ci])); }
+        break;
+      case 'S': S.mode = 'pick'; S.pick = { kind: 'squash', src: targets() }; S.cur.fi = -1; break;
+      case 'r': S.mode = 'pick'; S.pick = { kind: 'rebase', src: targets(), srcMode: '-r' }; S.cur.fi = -1; break;
+      case 'X': run('jj split -r ' + c.id + ii(), { interactive: true, touched: [S.cur.ci] }); break;
+      case 'u': run('jj undo'); break;
+      case 'U': run('jj redo'); break;
+      case 'b': openPicker('Bookmark → ' + c.id, bookmarks().map(b => ({ label: b.name })), it =>
+        run(it.create ? 'jj bookmark create ' + it.label + ' -r ' + c.id : 'jj bookmark set ' + it.label + ' -r ' + c.id + ' --allow-backwards'), true); break;
+      case 'B': openMenu('Bookmark… (on ' + c.id + ')', () => [
+        ['d', 'delete', () => withBookmarkOn(c, 'Delete bookmark', b => { S.mode = 'confirm'; S.confirm = { text: 'Delete bookmark ' + b + '?', yes: () => run('jj bookmark delete ' + b) }; })],
+        ['r', 'rename', () => withBookmarkOn(c, 'Rename bookmark', b => { S.mode = 'input'; S.input = { prompt: 'rename ' + b + ' to: ', value: b, onSubmit: v => v.trim() && v.trim() !== b ? run('jj bookmark rename ' + b + ' ' + v.trim()) : msg('rename cancelled') }; })],
+      ]); break;
+      case 'p': { const t = targets(); run('jj git push ' + t.map(i => '-r ' + CH[i].id).join(' '), { after: () => S.marks.clear() }); break; }
+      case 'P': { const t = targets(); run('jj git push ' + t.map(i => '-c ' + CH[i].id).join(' '), { after: () => S.marks.clear() }); break; }
+      case 'f': run('jj git fetch'); break;
+      case '!': S.ignoreImm = !S.ignoreImm; msg('--ignore-immutable ' + (S.ignoreImm ? 'ON' : 'off')); break;
+      default: return false;
+    }
+    return true;
+  }
+  // squash runs in the background unless two descriptions need combining; then jj opens $EDITOR, so suspend
+  function squash(cmd, involved) {
+    const described = involved.filter(i => CH[i].desc).length;
+    run(cmd, { interactive: described >= 2, touched: involved, after: () => S.marks.clear() });
+  }
+  function withBookmarkOn(c, title, fn) {
+    if (!c.bm.length) { msg('no bookmarks on ' + c.id, 'err'); return; }
+    if (c.bm.length === 1) { fn(c.bm[0]); return; }
+    openPicker(title, c.bm.map(b => ({ label: b })), it => fn(it.label));
+    return 'stay';
+  }
+  function pickKey(key) {
+    const P = S.pick, dest = CH[S.cur.ci];
+    switch (key) {
+      case 'j': case '↓': moveChange(1); return;
+      case 'k': case '↑': moveChange(-1); return;
+      case 'g': S.cur = { ci: 0, fi: -1 }; return;
+      case 'G': S.cur = { ci: CH.length - 1, fi: -1 }; return;
+      case 'esc': closeModal(); msg('cancelled'); return;
+    }
+    if (P.kind === 'rebase') {
+      const flag = { enter: '-d', o: '-d', a: '-A', b: '-B' }[key];
+      if (key === 's') { P.srcMode = { '-r': '-s', '-s': '-b', '-b': '-r' }[P.srcMode]; return; }
+      if (!flag) return;
+      if (P.src.includes(S.cur.ci)) { msg("Can't rebase a change onto itself", 'err'); return; }
+      closeModal();
+      run('jj rebase ' + P.src.map(i => P.srcMode + ' ' + CH[i].id).join(' ') + ' ' + flag + ' ' + dest.id + ii(), { touched: P.src, after: () => S.marks.clear() });
+    } else if (key === 'enter') {
+      const src = P.src.filter(i => i !== S.cur.ci);
+      if (!src.length) { msg("Can't squash a change into itself", 'err'); return; }
+      closeModal();
+      squash('jj squash --from ' + revsetArg(src) + ' --into ' + dest.id + ii(), src.concat([S.cur.ci]));
+    }
+  }
+  function pickerKey(key, raw) {
+    const p = S.picker, m = pickerMatches();
+    switch (key) {
+      case 'esc': closeModal(); msg('cancelled'); return;
+      case '↓': case 'ctrl+n': p.sel = Math.min(m.length - 1, p.sel + 1); return;
+      case '↑': case 'ctrl+p': p.sel = Math.max(0, p.sel - 1); return;
+      case 'enter': { const hit = m[p.sel]; const fn = p.onSelect; closeModal(); if (hit) fn(hit.it); return; }
+      case 'backspace': p.query = p.query.slice(0, -1); p.sel = 0; return;
+    }
+    if (raw.length === 1) { p.query += raw; p.sel = 0; }
+  }
+  function menuKey(key) {
+    if (key === 'esc' || key === 'q') { closeModal(); msg('cancelled'); return; }
+    const opt = S.menu.opts().find(o => o[0] === key);
+    if (!opt) return;
+    const menu = S.menu;
+    closeModal();
+    const r = opt[2]();
+    if (r === 'stay' && S.mode === 'normal') { S.mode = 'menu'; S.menu = menu; }
+  }
+  function confirmKey(key) {
+    if (key === 'y' || key === 'enter') { const f = S.confirm.yes; closeModal(); f(); }
+    else if (key === 'n' || key === 'esc') { closeModal(); msg('cancelled'); }
+  }
+  function inputKey(key, raw) {
+    const p = S.input;
+    if (key === 'esc') { closeModal(); msg('cancelled'); return; }
+    if (key === 'enter') { const f = p.onSubmit, v = p.value; closeModal(); f(v); return; }
+    if (key === 'backspace') { p.value = p.value.slice(0, -1); return; }
+    if (raw.length === 1) p.value += raw;
+  }
+
+  function keyName(e) {
+    const map = { ArrowDown: '↓', ArrowUp: '↑', Enter: 'enter', Escape: 'esc', Tab: 'tab', Backspace: 'backspace', ' ': 'space' };
+    let k = map[e.key] || e.key;
+    if (e.ctrlKey && e.key.length === 1) k = 'ctrl+' + e.key.toLowerCase();
+    else if (e.shiftKey && e.key === 'Tab') k = 'shift+tab';
+    return k;
+  }
+  term.addEventListener('keydown', e => {
+    if (e.metaKey || e.altKey) return;
+    if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) return;
+    e.preventDefault();
+    const key = keyName(e);
+    $('#lastKey').innerHTML = 'last key: <b>' + esc(key) + '</b>';
+    if (S.busy) { resume(lastCmd); return; }
+    if (S.help) {
+      if (key === '?' || key === 'esc' || key === 'q') S.help = false;
+      else if (key === 'j' || key === '↓') { helpEl.scrollTop += 30; return; }
+      else if (key === 'k' || key === '↑') { helpEl.scrollTop -= 30; return; }
+      render(); return;
+    }
+    const raw = e.ctrlKey ? '' : e.key;
+    if (S.mode === 'normal') { if (normal(key) === false && !['J', 'K', 'ctrl+f', 'ctrl+b'].includes(key)) msg('unbound key: ' + key); }
+    else if (S.mode === 'pick') pickKey(key);
+    else if (S.mode === 'picker') pickerKey(key, raw);
+    else if (S.mode === 'menu') menuKey(key);
+    else if (S.mode === 'confirm') confirmKey(key);
+    else if (S.mode === 'input') inputKey(key, raw);
+    render();
+  });
+  $('#tHint').addEventListener('mousedown', e => { e.preventDefault(); term.focus(); });
+  suspEl.addEventListener('click', () => { if (S.busy) resume(lastCmd); });
+
+  /* ---- rendering ---- */
+  const idHtml = (id, n) => span('c-magb', esc(id.slice(0, n))) + span('c-gry', esc(id.slice(n)));
+  const shaHtml = (sha, n) => span('c-blub', esc(sha.slice(0, n))) + span('c-gry', esc(sha.slice(n)));
+  const graphHtml = g => esc(g).replace(/@/, span('c-grnb', '@')).replace(/◆/, span('c-cyn', '◆')).replace(/○/, span('c-wht', '○'));
+  const stColor = { M: 'c-yel', A: 'c-grn', D: 'c-red', R: 'c-cyn', C: 'c-cyn' };
+  const L = (html, cls) => '<div class="l' + (cls ? ' ' + cls : '') + '">' + html + '</div>';
+
+  function renderLog() {
+    const out = [];
+    const picking = S.mode === 'pick';
+    CH.forEach((c, ci) => {
+      const curC = S.cur.ci === ci && S.cur.fi < 0;
+      const cls = curC ? (picking ? 'pcur' : 'cur') : '';
+      const gut = S.marks.has(ci) ? span('c-mark', '●') + ' ' : '  ';
+      const isSrc = picking && S.pick.src.includes(ci);
+      out.push(L(gut + graphHtml(c.g1) + idHtml(c.id, 1) + ' ' + span('c-yel', AUTHOR) + ' ' + span('c-cyn', c.time) +
+        (c.bm.length ? ' ' + span('c-mag', esc(c.bm.join(' '))) : '') + ' ' + shaHtml(c.sha, 1) +
+        (isSrc ? ' ' + span('c-tag', 'source') : '') + (curC && picking ? ' ' + span('c-org', '← ' + (S.pick.kind === 'rebase' ? 'destination' : 'target')) : ''), cls));
+      out.push(L('  ' + graphHtml(c.g2) + (c.desc ? (c.wc ? span('c-b', esc(c.desc)) : esc(c.desc)) : span('c-yel', '(no description set)')), cls));
+      if (S.expanded.has(ci)) c.files.forEach((f, fi) => {
+        const curF = S.cur.ci === ci && S.cur.fi === fi;
+        out.push(L('  ' + graphHtml(c.g2) + '  ' + span(stColor[f[0]], f[0]) + ' ' + esc(f[2] || f[1]), curF ? 'cur' : ''));
+      });
+      if (c.tail) out.push(L('  ' + esc(c.tail)));
+    });
+    logEl.innerHTML = out.join('');
+    const cur = logEl.querySelector('.cur, .pcur');
+    if (cur) {
+      const top = cur.offsetTop - logEl.offsetTop, h = cur.offsetHeight * (S.cur.fi < 0 ? 2 : 1);
+      if (top < logEl.scrollTop) logEl.scrollTop = top - 4;
+      else if (top + h > logEl.scrollTop + logEl.clientHeight) logEl.scrollTop = top + h - logEl.clientHeight + 4;
+    }
+  }
+
+  function diffLines(c, f) {
+    const d = DIFFS[c.id + ':' + f[1]];
+    const verb = { M: 'Modified', A: 'Added', D: 'Removed', R: 'Renamed', C: 'Copied' }[f[0]];
+    const out = [L(span('c-wht c-b', verb + ' regular file ' + esc(f[2] || f[1]) + ':'))];
+    if (!d) return out;
+    let o = d[0], n = d[0];
+    const pad = x => x == null ? '    ' : String(x).padStart(4);
+    d.slice(1).forEach(line => {
+      const t = line[0], text = esc(line.slice(1));
+      if (t === '-') { out.push(L(span('c-red', pad(o) + ' ' + pad(null)) + ': ' + span('c-red', text))); o++; }
+      else if (t === '+') { out.push(L(span('c-grn', pad(null) + ' ' + pad(n)) + ': ' + span('c-grn', text))); n++; }
+      else { out.push(L(span('c-gry', pad(o) + ' ' + pad(n)) + ': ' + text)); o++; n++; }
+    });
+    return out;
+  }
+  function renderDiff() {
+    diffEl.hidden = !S.split;
+    if (!S.split) { logEl.style.flex = '1 1 auto'; return; }
+    logEl.style.flex = '0 0 ' + (S.ratio * 100) + '%';
+    diffEl.style.flex = '1 1 0';
+    const c = CH[S.cur.ci];
+    const files = S.cur.fi >= 0 ? [c.files[S.cur.fi]] : c.files;
+    const vars = { 'from-sha': parentSha(c), 'to-sha': c.sha, revset: c.id, files: S.cur.fi >= 0 ? [files[0][1]] : [], width: 96, repo: '~/code/jjtui-demo' };
+    const head = L(span('c-dim', '$ ' + esc(renderCmd(PREVIEWS['default (jj)'].cmd, vars))));
+    diffEl.innerHTML = head + files.map(f => diffLines(c, f).join('') + L('')).join('');
+  }
+
+  function renderPanel() {
+    let h = '';
+    if (S.mode === 'pick') {
+      const P = S.pick, src = ids(P.src).join(' ');
+      h = P.kind === 'rebase'
+        ? span('c-org c-b', 'rebase ' + P.srcMode + ' ' + esc(src)) + ' → pick destination  ' +
+          span('c-blub', 'enter/o') + ' onto · ' + span('c-blub', 'a') + ' after · ' + span('c-blub', 'b') + ' before · ' +
+          span('c-blub', 's') + ' source mode (' + P.srcMode + ') · ' + span('c-blub', 'esc') + ' cancel'
+        : span('c-org c-b', 'squash ' + esc(src)) + ' → pick target  ' + span('c-blub', 'enter') + ' squash into · ' + span('c-blub', 'esc') + ' cancel';
+    } else if (S.mode === 'picker') {
+      const p = S.picker, m = pickerMatches();
+      h = span('c-org c-b', esc(p.title)) + '  ' + span('c-blub', '> ') + esc(p.query) + span('c-wht', '▏') + '\n' +
+        (m.length ? m.slice(0, 6).map((r, i) => {
+          const lbl = r.it.create ? span('c-grn', '+ create ') + esc(r.it.label)
+            : Array.from(r.it.label).map((ch, k) => r.pos.includes(k) ? span('c-fz', esc(ch)) : esc(ch)).join('');
+          return (i === p.sel ? span('c-sel', span('c-org', '▶ ') + lbl) : '  ' + lbl);
+        }).join('\n') : span('c-dim', '  no matches'));
+    } else if (S.mode === 'menu') {
+      h = span('c-org c-b', esc(S.menu.title)) + '  ' + S.menu.opts().map(o => span('c-blub', o[0]) + ' ' + esc(o[1])).join('   ') + '   ' + span('c-dim', 'esc/q cancel');
+    } else if (S.mode === 'confirm') {
+      h = span('c-red c-b', esc(S.confirm.text)) + '  ' + span('c-blub', 'y/enter') + ' yes  ' + span('c-blub', 'n/esc') + ' no';
+    } else if (S.mode === 'input') {
+      h = span('c-org', esc(S.input.prompt)) + esc(S.input.value) + span('c-wht', '▏');
+    }
+    panelEl.innerHTML = h;
+  }
+  function renderStatus() {
+    const mode = S.help ? 'help' : S.mode;
+    statusEl.innerHTML =
+      '<span class="mode ' + mode + '">' + mode.toUpperCase() + '</span>' +
+      (S.marks.size ? '<span class="c-mark">● ' + S.marks.size + ' marked</span>' : '') +
+      (S.ignoreImm ? '<span class="c-red c-b">--ignore-immutable</span>' : '') +
+      '<span>revset: ' + span('c-wht', esc(S.revset || 'default')) + '</span>' +
+      '<span>diff: ' + span('c-wht', esc(S.tool)) + '</span>' +
+      (S.mode === 'picker'
+        ? '<span class="msg">type to filter · ↑/↓ move · enter select · esc cancel</span>'
+        : '<span class="msg ' + S.msg.kind + '">' + esc(S.msg.text) + '</span>') +
+      '<span class="c-dim">? help</span>';
+  }
+  function renderHelp() {
+    helpEl.classList.toggle('show', S.help);
+    if (!S.help || helpEl.dataset.ready) return;
+    helpEl.innerHTML = '<div style="color:#ffaf5f;font-weight:bold;margin-bottom:6px">jjtui help — ? / esc / q to close · j/k scroll</div><div class="help-cols">' +
+      KEYMAP.map(g => '<div class="help-g"><h4>' + esc(g.title) + '</h4>' + g.rows.map(r =>
+        '<div class="help-row"><span class="hk">' + esc(r.k) + '</span><span class="hd">' + (r.m ? span('c-mag', esc(r.m)) + ' · ' : '') + esc(r.d.replace(/`/g, '')) + '</span></div>').join('') + '</div>').join('') + '</div>';
+    helpEl.dataset.ready = '1';
+  }
+  function render() { renderLog(); renderDiff(); renderPanel(); renderStatus(); renderHelp(); }
+  render();
+})();
+</script>
+</body>
+</html>

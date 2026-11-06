@@ -1,0 +1,16 @@
+#!/usr/bin/env bb
+;; Runs jjtui from anywhere: resolves this script's checkout (through
+;; symlinks) and loads its bb.edn paths and deps.
+(require '[babashka.classpath :as cp]
+         '[babashka.deps :as deps]
+         '[babashka.fs :as fs]
+         '[clojure.edn :as edn])
+
+(let [root (-> *file* fs/canonicalize fs/parent fs/parent)
+      bb-edn (edn/read-string (slurp (str (fs/file root "bb.edn"))))]
+  (deps/add-deps {:deps (:deps bb-edn)})
+  (doseq [path (:paths bb-edn)]
+    (cp/add-classpath (str (fs/file root path)))))
+
+(require 'jjtui.main)
+(apply (resolve 'jjtui.main/-main) *command-line-args*)
