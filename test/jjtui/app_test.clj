@@ -7,6 +7,7 @@
    [jjtui.app :as app]
    [jjtui.config :as config]
    [jjtui.effects :as effects]
+   [jjtui.graph :as graph]
    [jjtui.log :as log]
    [jjtui.log-test :refer [file-line marker]]
    [jjtui.state :as st]
@@ -311,11 +312,43 @@
    :bookmark/synced? synced?
    :bookmark/description "d"})
 
+(defn- branch-diff-loaded
+  "The branch picker of D, opened at the cursor of `s`."
+  ([s] (branch-diff-loaded s nil))
+  ([s g]
+   (first (press s "D" (cond-> {:type :msg/bookmarks-loaded
+                                :msg/purpose :branch-diff
+                                :msg/result {:jj/bookmarks [(bookmark "feat" nil) (bookmark "main" nil) (bookmark "main" "origin")]}}
+                         g (assoc :msg/graph {:jj/graph g}))))))
+
+(defn- picker-values [s & ks]
+  (map :item/value (st/picker-matches (:app/mode (first (apply press s ks))))))
+
+(deftest branch-diff-source-test
+  (testing "the graph is read up to the bookmarks and the cursor"
+    (is (= "bookmarks() | cw" (:fx/graph (first (second (press (loaded) "D")))))))
+  (testing "the change at the cursor comes first, before the bookmarks"
+    (is (= ["cw" "feat" "main" "main@origin"] (picker-values (branch-diff-loaded (loaded))))))
+  (testing "the cursor's change diffs by its commit id"
+    (is (= "fork_point(trunk() | cw)..cw"
+           (some #(when (str/starts-with? % "fork_point") %)
+                 (get-in (first (press (branch-diff-loaded (loaded)) "enter" "enter")) [:app/exec :exec/argv])))))
+  (testing "a bookmarked one goes by its bookmark, not listed twice"
+    (is (= ["feat" "main" "main@origin"] (picker-values (branch-diff-loaded (first (press (loaded) "j"))))))))
+
+(deftest branch-diff-parent-test
+  (let [g (graph/build [{:node/id "cw" :node/parents ["cb"] :node/bookmarks []}
+                        {:node/id "cb" :node/parents ["ca"] :node/bookmarks ["feat"]}
+                        {:node/id "ca" :node/parents ["cm"] :node/bookmarks ["main"]}])
+        s (branch-diff-loaded (loaded) g)
+        bases #(take 4 (map (juxt :item/value :item/detail) (st/picker-matches (:app/mode (first (apply press s %))))))]
+    (testing "the bookmark a change without one stacks on comes right after trunk"
+      (is (= [["trunk()" "default"] ["feat" "parent"] ["main" nil] ["main@origin" nil]] (bases ["enter"]))))
+    (testing "so does the parent of a picked bookmark"
+      (is (= [["trunk()" "default"] ["main" "parent"] ["main@origin" nil] ["cw" nil]] (bases ["f" "e" "a" "t" "enter"]))))))
+
 (deftest branch-diff-test
-  (let [[s] (press (loaded) "D" {:type :msg/bookmarks-loaded
-                                 :msg/purpose :branch-diff
-                                 :msg/result {:jj/bookmarks [(bookmark "feat" nil) (bookmark "main" nil) (bookmark "main" "origin")]}})
-        [s] (press s "f" "e" "a" "t" "enter")
+  (let [[s] (press (branch-diff-loaded (loaded)) "f" "e" "a" "t" "enter")
         values #(map :item/value (st/picker-matches (:app/mode (first (apply press s %)))))
         revset #(some (fn [arg] (when (str/starts-with? arg "fork_point") arg))
                       (get-in (first (apply press s %)) [:app/exec :exec/argv]))]
@@ -440,7 +473,8 @@
   (let [now 1000000000]
     (checked st/State
              (app/init-state {:config (config/user->internal config/defaults)
-                              :mode (app/chooser {:git-root "/work/lib"
+                              :mode (app/chooser {:dir "/work/lib"
+                                                  :git-root "/work/lib"
                                                   :parent "/work"
                                                   :recent [{:visit/dir "/code/other" :visit/count 3 :visit/last (- now 7200000)}]
                                                   :now now})}))))
@@ -451,7 +485,7 @@
            (map (juxt :choice/key :choice/action) (get-in s [:app/mode :mode/choices]))))
     (is (= "3 visits · 2h ago" (get-in s [:app/mode :mode/choices 2 :choice/detail])))
     (testing "a hotkey or j + enter picks a choice"
-      (is (= [{:fx/type :init-repo :fx/dir "/work/lib"}] (second (press s "i"))))
+      (is (= [{:fx/type :init-repo :fx/dir "/work/lib" :fx/colocate? true}] (second (press s "i"))))
       (is (= [{:fx/type :open-repo :fx/dir "/work"}] (second (press s "j" "enter"))))
       (is (= [{:fx/type :open-repo :fx/dir "/code/other"}] (second (press s "1")))))
     (testing "one choice at a time"
@@ -471,6 +505,30 @@
         (is (= [:load-log] (map :fx/type fx)))
         (let [[s] (step s (loaded-msg (:fx/gen (first fx)) log-output))]
           (is (= "wwww" (cursor-id s))))))))
+
+(deftest chooser-outside-git-test
+  (let [now 1000000000
+        visit (fn [dir] {:visit/dir dir :visit/count 1 :visit/last now})
+        chooser (fn [nearby recent]
+                  (checked st/State
+                           (app/init-state {:config (config/user->internal config/defaults)
+                                            :mode (app/chooser {:dir "/mq" :nearby nearby :recent recent :now now})})))
+        s (chooser [(visit "/mq/dash") {:visit/dir "/mq/ui"}] (map #(visit (str "/r" %)) (range 12)))
+        choices (get-in s [:app/mode :mode/choices])]
+    (is (= [["i" :setup "Create a jj repo here"] ["1" :nearby "dash"] ["2" :nearby "ui"] ["3" :recent "/r0"]]
+           (map (juxt :choice/key :choice/group :choice/label) (take 4 choices)))
+        "repos under the start dir first, labelled relative to it")
+    (is (= "not opened yet" (:choice/detail (nth choices 2))))
+    (is (= 12 (count choices)) "up to nine recent repos besides the nearby ones")
+    (is (= ["9" nil nil] (map :choice/key (drop 9 choices))) "hotkeys for the first nine repos")
+    (testing "enter opens the first repo rather than creating one"
+      (is (= [{:fx/type :open-repo :fx/dir "/mq/dash"}] (second (press s "enter")))))
+    (testing "i creates a jj repo in the start dir"
+      (is (= [{:fx/type :init-repo :fx/dir "/mq" :fx/colocate? false}] (second (press s "i")))))
+    (testing "a repo without a hotkey is picked with j + enter"
+      (is (= [{:fx/type :open-repo :fx/dir "/r10"}] (second (apply press s (concat (repeat 10 "j") ["enter"]))))))
+    (testing "without repos to offer, creating one is selected"
+      (is (= [{:fx/type :init-repo :fx/dir "/mq" :fx/colocate? false}] (second (press (chooser [] []) "enter")))))))
 
 (deftest fuzzy-score-test
   (is (some? (st/fuzzy-score "fl" "feature/login")))

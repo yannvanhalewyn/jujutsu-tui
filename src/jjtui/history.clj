@@ -17,11 +17,12 @@
 (def Visits [:map-of :string Visit])
 
 (def Suggestion
-  "A visited repo, as `suggestions` returns it."
+  "A repo to offer, as `suggestions` and `nearby-first` return it. Repos
+   found on disk that were never opened have no visit stats."
   [:map
    [:visit/dir :string]
-   [:visit/count pos-int?]
-   [:visit/last {:doc "Epoch millis"} :int]])
+   [:visit/count {:optional true} pos-int?]
+   [:visit/last {:optional true :doc "Epoch millis"} :int]])
 
 (def ^:private max-entries 100)
 
@@ -84,3 +85,14 @@
        (filter (fn [[dir]] (fs/directory? (fs/path dir ".jj"))))
        (sort-by (best-first now))
        (mapv (fn [[dir v]] (assoc v :visit/dir dir)))))
+
+(defn nearby-first
+  "Splits `suggestions` (best first) into the repos under `dir` and the rest,
+   each keeping its order. The never-visited repos in `found`, all under
+   `dir`, follow the visited nearby ones in the order given. Returns
+   {:nearby [Suggestion] :others [Suggestion]}."
+  [suggestions found dir]
+  (let [{nearby true others false} (group-by #(fs/starts-with? (:visit/dir %) dir) suggestions)
+        visited (set (map :visit/dir suggestions))]
+    {:nearby (into (vec nearby) (comp (remove visited) (map #(hash-map :visit/dir %))) found)
+     :others (vec others)}))

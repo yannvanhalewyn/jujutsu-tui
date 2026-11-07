@@ -408,25 +408,34 @@
 ;; ---------------------------------------------------------------------------
 ;; Repo chooser
 
-(defn- chooser-screen [state]
-  (let [{:mode/keys [git-root choices selected]} (:app/mode state)
+(defn- chooser-screen
+  "The chooser's lines, scrolled so the selected choice stays within
+   `height`."
+  [state height]
+  (let [{:mode/keys [dir git-root choices selected]} (:app/mode state)
         width (:app/width state)
-        recent? #(re-matches #"\d" (:choice/key %))
         line (fn [i {:choice/keys [key label detail]}]
-               (let [s (str (bold (fg 3 key)) "  " label "  " (dim detail))]
+               (let [s (str (bold (fg 3 (or key " "))) "  " label "  " (dim detail))]
                  (if (= i selected)
                    (with-bg (str (fg 5 " ❯ ") s) (:selected (palette state)) width)
-                   (fit (str "   " s) width))))]
-    (concat [""
-             (str " " (bold git-root) " is a git repo, but jj isn't set up in it.")
-             (dim " Choose how to continue:")
-             ""]
-            (map-indexed line (remove recent? choices))
-            [""
-             (bold (fg 6 " Recent repos"))]
-            (if (some recent? choices)
-              (keep-indexed (fn [i c] (when (recent? c) (line i c))) choices)
-              [(dim "   none yet: jjtui remembers the repos you open")]))))
+                   (fit (str "   " s) width))))
+        group (fn [g] (keep-indexed (fn [i c] (when (= g (:choice/group c)) [i (line i c)])) choices))
+        section (fn [title rows] (when (seq rows) (concat [[nil ""] [nil (bold (fg 6 (str " " title)))]] rows)))
+        recent (group :recent)
+        rows (concat [[nil ""]
+                      [nil (if git-root
+                             (str " " (bold git-root) " is a git repo, but jj isn't set up in it.")
+                             (str " " (bold dir) " isn't in a jj repo."))]
+                      [nil (dim " Choose how to continue:")]
+                      [nil ""]]
+                     (group :setup)
+                     (section (str "Repos in " dir) (group :nearby))
+                     (or (section "Recent repos" recent)
+                         [[nil ""] [nil (bold (fg 6 " Recent repos"))]
+                          [nil (dim "   none yet: jjtui remembers the repos you open")]]))
+        at (count (take-while #(not= selected (first %)) rows))
+        offset (max 0 (- (inc at) height))]
+    (map second (take height (drop offset rows)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Root
@@ -439,7 +448,7 @@
         cursor-idx (st/cursor-index state)
         body (case (get-in state [:app/mode :mode/type])
                :help (help-screen state body-h)
-               :no-repo (chooser-screen state)
+               :no-repo (chooser-screen state body-h)
                (let [left (log-lines state cursor-idx body-h lw)]
                  (if (:app/split? state)
                    (let [pw (- width lw 1)

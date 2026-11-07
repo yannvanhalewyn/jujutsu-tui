@@ -5,6 +5,7 @@
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
    [jjtui.seed :as seed]
+   [jjtui.graph :as graph]
    [jjtui.jj :as jj]
    [jjtui.log :as log]
    [malli.core :as m]
@@ -49,3 +50,17 @@
           (is (= [false false] ((juxt :bookmark/tracked? :bookmark/synced?)
                                 (first (filter #(= "main" (:bookmark/ref %)) (:jj/bookmarks (jj/bookmarks dir))))))
               "a local bookmark moved since the push is out of sync"))))))
+
+(deftest graph-test
+  (fs/with-temp-dir [tmp {}]
+    (let [dir (seed/create! :megamerge (str (fs/path tmp "repo")))
+          res (jj/graph dir "bookmarks() | @")
+          g (:jj/graph res)
+          at (first (:jj/ids (jj/commit-ids dir "@")))]
+      (is (nil? (explain jj/Graph res)))
+      (testing "trunk and below are left out"
+        (is (nil? (graph/bookmark-node g "main"))))
+      (testing "a megamerge stacks on the branches it merges, the dev changes have none"
+        (is (= ["feature/tags" "docs/usage"] (graph/parent-bookmarks g at))))
+      (testing "a stacked branch on the one below it"
+        (is (= ["refactor/store"] (graph/parent-bookmarks g (:node/id (graph/bookmark-node g "feature/tags")))))))))

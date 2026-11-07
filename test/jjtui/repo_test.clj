@@ -18,7 +18,7 @@
     (is (= [:choose {:git-root "/r-lib" :parent nil}] (repo/locate nil "/r-lib"))))
   (testing "path prefixes aren't parents"
     (is (= [:open "/r"] (repo/locate "/r" "/rx"))))
-  (is (nil? (repo/locate nil nil))))
+  (is (= [:choose {:git-root nil :parent nil}] (repo/locate nil nil)) "neither jj nor git"))
 
 (deftest git-root-test
   (fs/with-temp-dir [tmp {}]
@@ -42,16 +42,30 @@
             lib (str (fs/path outer "lib"))
             sub (str (fs/path lib "src"))]
         (git! outer "init" "-q")
-        (is (nil? (:jj/error (repo/init-colocated outer nil))))
+        (is (nil? (:jj/error (repo/init outer true nil))))
         (fs/create-dirs sub)
         (git! lib "init" "-q")
         (spit (str (fs/path lib "x")) "x")
         (git! lib "add" "x")
         (git! lib "commit" "-qm" "lib")
         (testing "started in a subdirectory of a git repo inside a jj repo"
-          (is (= [:choose {:git-root lib :parent outer}] (repo/find-start sub))))
+          (is (= [:choose {:git-root lib :parent outer :dir sub}] (repo/find-start sub))))
         (testing "jj is set up in the git root, not the start dir or the outer jj repo"
-          (is (= lib (:repo/dir (repo/init-colocated lib nil))))
+          (is (= lib (:repo/dir (repo/init lib true nil))))
           (is (fs/exists? (fs/path lib ".jj")))
           (is (not (fs/exists? (fs/path sub ".jj"))))
           (is (= [:open lib] (repo/find-start sub))))))))
+
+(deftest outside-any-repo-test
+  (fs/with-temp-dir [tmp {}]
+    (with-redefs [history/default-path (constantly (str (fs/path tmp "history.edn")))]
+      (let [dir (str (fs/path (fs/canonicalize tmp) "code"))
+            [api app plain] (map #(str (fs/path dir %)) ["api" "app" "plain"])]
+        (run! fs/create-dirs [api app plain])
+        (is (= [:choose {:git-root nil :parent nil :dir dir}] (repo/find-start dir)))
+        (is (empty? (repo/child-repos dir)))
+        (testing "jj is created in a plain dir"
+          (is (= app (:repo/dir (repo/init app false nil))))
+          (is (= api (:repo/dir (repo/init api false nil)))))
+        (testing "the jj repos directly inside a dir, sorted"
+          (is (= [api app] (repo/child-repos dir))))))))

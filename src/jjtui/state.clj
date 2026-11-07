@@ -11,6 +11,8 @@
    [charm.components.text-input :as ti]
    [clojure.string :as str]
    [jjtui.config :as config]
+   [jjtui.graph :as graph]
+   [jjtui.jj :as jj]
    [jjtui.log :as log]))
 
 ;; ---------------------------------------------------------------------------
@@ -44,10 +46,12 @@
 (def Choice
   "An option of the repo chooser."
   [:map
-   [:choice/key {:doc "Hotkey"} :string]
+   [:choice/key {:doc "Hotkey"} [:maybe :string]]
+   [:choice/group {:doc ":nearby repos under the start dir, :recent other visited ones"} [:enum :setup :nearby :recent]]
    [:choice/label :string]
    [:choice/detail :string]
-   [:choice/action {:doc "[:init git-root] or [:open dir]"} [:tuple [:enum :init :open] :string]]])
+   [:choice/action {:doc "[:init git-root] to colocate, [:create dir] or [:open dir]"}
+    [:tuple [:enum :init :create :open] :string]]])
 
 (def Mode
   "The modal interaction in progress, on top of normal mode."
@@ -69,7 +73,9 @@
              [:mode/selected :int]
              [:mode/input TextInput]
              [:mode/op {:optional true} [:enum :delete :rename]]
-             [:mode/source {:optional true :doc "The bookmark being diffed, while picking its base"} :string]]]
+             [:mode/source {:optional true :doc "The bookmark or commit being diffed, while picking its base"} :string]
+             [:mode/bookmarks {:optional true :doc "Of the branch diff, offered again as its bases"} [:vector jj/Bookmark]]
+             [:mode/graph {:optional true :doc "Of the branch diff, to suggest the parent bookmarks as bases"} graph/Graph]]]
    [:menu [:map
            [:mode/type [:= :menu]]
            [:mode/purpose [:enum :new :bookmark]]
@@ -101,7 +107,8 @@
              [:mode/origin {:doc "Cursor to return to on escape"} [:maybe Cursor]]]]
    [:no-repo [:map
               [:mode/type [:= :no-repo]]
-              [:mode/git-root {:doc "The git repo without jj that jjtui started in"} :string]
+              [:mode/dir {:doc "Where jjtui started, outside any jj repo"} :string]
+              [:mode/git-root {:doc "The git repo without jj around :mode/dir"} [:maybe :string]]
               [:mode/choices [:vector Choice]]
               [:mode/selected :int]]]])
 

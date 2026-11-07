@@ -43,7 +43,8 @@
    [:msg/bookmarks-loaded [:map
                            [:type [:= :msg/bookmarks-loaded]]
                            [:msg/purpose BookmarkPurpose]
-                           [:msg/result jj/Bookmarks]]]
+                           [:msg/result jj/Bookmarks]
+                           [:msg/graph {:optional true} jj/Graph]]]
    [:msg/description-loaded [:map
                              [:type [:= :msg/description-loaded]]
                              [:msg/change-id :string]
@@ -78,14 +79,17 @@
                  [:base-template :string]
                  [:files [:or [:= :all] :string :nil]]]]]]
    [:jj JjEffect]
-   [:bookmarks [:map [:fx/type [:= :bookmarks]] [:fx/purpose BookmarkPurpose]]]
+   [:bookmarks [:map
+                [:fx/type [:= :bookmarks]]
+                [:fx/purpose BookmarkPurpose]
+                [:fx/graph {:optional true :doc "Also read the graph of trunk()..these heads (a revset)"} :string]]]
    [:description [:map [:fx/type [:= :description]] [:fx/change-id :string]]]
    [:recent-repos [:map [:fx/type [:= :recent-repos]] [:fx/exclude {:doc "Dirs to leave out"} [:set :string]]]]
    [:resolve-diff [:map [:fx/type [:= :resolve-diff]] [:fx/target st/DiffTarget]]]
    [:debounce [:map [:fx/type [:= :debounce]] [:fx/ms :int] [:fx/msg Msg]]]
    [:preview [:map [:fx/type [:= :preview]] [:fx/key st/PreviewKey]]]
    [:open-repo [:map [:fx/type [:= :open-repo]] [:fx/dir :string]]]
-   [:init-repo {:doc "jj git init --colocate, then open"} [:map [:fx/type [:= :init-repo]] [:fx/dir :string]]]])
+   [:init-repo {:doc "jj git init, then open"} [:map [:fx/type [:= :init-repo]] [:fx/dir :string] [:fx/colocate? {:doc "Reuse the git repo at dir"} :boolean]]]])
 
 ;; ---------------------------------------------------------------------------
 ;; Running effects
@@ -145,9 +149,10 @@
                                                   (:fx/then effect))))
 
       :bookmarks
-      (program/cmd #(hash-map :type :msg/bookmarks-loaded
-                              :msg/purpose (:fx/purpose effect)
-                              :msg/result (jj/bookmarks dir)))
+      (program/cmd #(cond-> {:type :msg/bookmarks-loaded
+                             :msg/purpose (:fx/purpose effect)
+                             :msg/result (jj/bookmarks dir)}
+                      (:fx/graph effect) (assoc :msg/graph (jj/graph dir (:fx/graph effect)))))
 
       :description
       (program/cmd #(hash-map :type :msg/description-loaded
@@ -181,7 +186,7 @@
 
       :init-repo
       (program/cmd #(hash-map :type :msg/repo-opened
-                              :msg/result (repo/init-colocated (:fx/dir effect) log-template))))))
+                              :msg/result (repo/init (:fx/dir effect) (:fx/colocate? effect) log-template))))))
 
 (defn ->cmd
   "One charm command for a list of effects. Quitting wins over everything

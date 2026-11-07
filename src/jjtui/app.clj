@@ -8,6 +8,7 @@
    [charm.components.text-input :as ti]
    [clojure.string :as str]
    [jjtui.config :as config]
+   [jjtui.graph :as graph]
    [jjtui.keys :as keys]
    [jjtui.log :as log]
    [jjtui.state :refer [cursor-entry cursor-index cursor-row entries picker-matches
@@ -195,13 +196,16 @@
    [{:fx/type :quit}]])
 
 (defn- open-repo
-  "Opens the jj repo at `dir` (`op` :open), or sets jj up there first
-   (:init), replacing the open repo once it's ready."
+  "Opens the jj repo at `dir` (`op` :open), or sets jj up there first (:init
+   colocates with the git repo at `dir`, :create makes a new one), replacing
+   the open repo once it's ready."
   [state op dir]
   (if (:app/busy state)
     [(error state (str "Busy: " (:app/busy state))) []]
-    [(assoc state :app/busy (if (= :init op) (str "Setting up jj in " dir) (str "Opening " dir)))
-     [{:fx/type (if (= :init op) :init-repo :open-repo) :fx/dir dir}]]))
+    [(assoc state :app/busy (if (= :open op) (str "Opening " dir) (str "Setting up jj in " dir)))
+     [(if (= :open op)
+        {:fx/type :open-repo :fx/dir dir}
+        {:fx/type :init-repo :fx/dir dir :fx/colocate? (= :init op)})]]))
 
 ;; ---------------------------------------------------------------------------
 ;; Diffs
@@ -246,20 +250,50 @@
      :target/from-commit? true
      :target/to-rev ref}))
 
-(defn- change-base-item [{:change/keys [short-id commit-id description] :as entry}]
-  {:item/label (str short-id "  " (subs commit-id 0 (min 8 (count commit-id))) "  "
-                    (if (str/blank? description) "(no description set)" description))
-   :item/value commit-id
-   :item/change entry})
+(defn- bookmark-item [{:bookmark/keys [ref commit description]} value]
+  {:item/label (str ref "  " commit "  " description) :item/value value})
+
+(defn- change-label [{:change/keys [short-id commit-id bookmarks description]}]
+  (str/join "  " (remove str/blank? [short-id
+                                     (subs commit-id 0 (min 8 (count commit-id)))
+                                     (str/join " " bookmarks)
+                                     (if (str/blank? description) "(no description set)" description)])))
+
+(defn- change-base-item [{:change/keys [commit-id] :as entry}]
+  {:item/label (change-label entry) :item/value commit-id :item/change entry})
+
+(defn- source-items
+  "Branches to diff: the change at the cursor first, by its first bookmark
+   when it has one, then the (other) bookmarks."
+  [state bms]
+  (let [cursor (when-let [{:change/keys [bookmarks commit-id] :as entry} (cursor-entry state)]
+                 {:item/label (change-label entry)
+                  :item/detail "cursor"
+                  :item/value (or (first bookmarks) commit-id)})]
+    (-> (if cursor [cursor] [])
+        (into (comp (map #(bookmark-item % (:bookmark/ref %)))
+                    (remove #(= (:item/value cursor) (:item/value %))))
+              bms))))
 
 (defn- base-items
-  "What the branch `ref` can be diffed against, the default first: trunk, the
-   other bookmarks (`bookmark-items`, those of the branch picker), then the
-   loaded changes."
-  [state ref bookmark-items]
-  (-> [{:item/label "trunk()" :item/detail "default" :item/value "trunk()"}]
-      (into (remove #(= ref (:item/value %))) bookmark-items)
-      (into (map change-base-item) (entries state))))
+  "What `source` (a bookmark, or the commit id of a change without one) can
+   be diffed against, the default first: trunk, the bookmarks it stacks on,
+   the other bookmarks, then the loaded changes."
+  [state graph source bms]
+  (let [parents (when graph
+                  (graph/parent-bookmarks graph (if (graph/node graph source)
+                                                  source
+                                                  (:node/id (graph/bookmark-node graph source)))))
+        parent? (set parents)
+        local (into {} (comp (remove :bookmark/remote) (map (juxt :bookmark/name identity))) bms)]
+    (-> [{:item/label "trunk()" :item/detail "default" :item/value "trunk()"}]
+        (into (map #(assoc (if-let [b (local %)] (bookmark-item b %) {:item/label % :item/value %})
+                           :item/detail "parent"))
+              parents)
+        (into (comp (map #(bookmark-item % (:bookmark/ref %)))
+                    (remove #(or (= source (:item/value %)) (parent? (:item/value %)))))
+              bms)
+        (into (map change-base-item) (entries state)))))
 
 (defn diff-vars [state target]
   {"revset" (:target/revset target)
@@ -548,7 +582,10 @@
     :diff/open (if-let [target (diff-target state)]
                  (open-diff state target)
                  [(error state "No change at cursor") []])
-    :diff/branch [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :branch-diff}]]
+    :diff/branch [(info state "Loading bookmarks…")
+                  [{:fx/type :bookmarks
+                    :fx/purpose :branch-diff
+                    :fx/graph (str "bookmarks()" (some->> (cursor-entry state) :change/commit-id (str " | ")))}]]
     :diff/pick-tool
     [(open-picker state :diff-tool "Diff tool"
                   (vec (for [k (sort (keys (get-in state [:app/config :config/diff-tools])))]
@@ -683,12 +720,15 @@
                         :mode/op op)
            []])))))
 
-(defn- picker-choice [state {:mode/keys [purpose op items source]} {:item/keys [value create?]}]
+(defn- picker-choice [state {:mode/keys [purpose op source bookmarks graph]} {:item/keys [value create?]}]
   (let [state (assoc state :app/mode nil)]
     (case purpose
       :diff-tool [(info (assoc state :app/diff-tool value) (str "Diff tool: " (name value))) []]
-      :branch-diff [(open-picker state :branch-base (str "Diff " value " from its fork point with")
-                                 (base-items state value items) :mode/source value)
+      :branch-diff [(open-picker state :branch-base
+                                 (str "Diff " (or (:change/short-id (entry-by-commit state value)) value)
+                                      " from its fork point with")
+                                 (base-items state graph value bookmarks)
+                                 :mode/source value)
                     []]
       :branch-base (open-diff state (branch-target value source))
       :bookmark-op (bookmark-chosen state op value)
@@ -770,31 +810,51 @@
       :else (str (quot minutes (* 60 24)) "d ago"))))
 
 (defn- visit-detail [{n :visit/count last-ms :visit/last} now]
-  (str n (if (= 1 n) " visit · " " visits · ") (ago (- now last-ms))))
+  (if n
+    (str n (if (= 1 n) " visit · " " visits · ") (ago (- now last-ms)))
+    "not opened yet"))
+
+(defn- relative [dir path]
+  (let [prefix (str (str/replace dir #"/$" "") "/")]
+    (if (str/starts-with? path prefix) (subs path (count prefix)) path)))
 
 (defn chooser
-  "The repo chooser for a git repo without jj: set jj up in it, open the jj
-   repo it sits in (`parent`), or one of the `recent` repos
-   (jjtui.history/suggestions)."
-  [{:keys [git-root parent recent now]}]
-  {:mode/type :no-repo
-   :mode/git-root git-root
-   :mode/selected 0
-   :mode/choices
-   (into (cond-> [{:choice/key "i"
-                   :choice/label "Set up jj in this git repo"
-                   :choice/detail (str "jj git init --colocate in " git-root)
-                   :choice/action [:init git-root]}]
-           parent (conj {:choice/key "p"
-                         :choice/label "Open the jj repo it's inside"
-                         :choice/detail parent
-                         :choice/action [:open parent]}))
-         (map-indexed (fn [i {dir :visit/dir :as visit}]
-                        {:choice/key (str (inc i))
-                         :choice/label dir
-                         :choice/detail (visit-detail visit now)
-                         :choice/action [:open dir]}))
-         (take 9 recent))})
+  "The repo chooser for starting outside a jj repo, in `dir`. Offers to set
+   jj up in the git repo around it (`git-root`) or else in `dir`, to open the
+   jj repo the git repo sits in (`parent`), and the repos under `dir`
+   (`nearby`) and up to nine `recent` others (the :nearby and :others of
+   jjtui.history/nearby-first). The first nine repos get hotkeys 1-9.
+   Outside a git repo the first repo starts selected, so enter doesn't
+   create a repo by accident."
+  [{:keys [dir git-root parent nearby recent now]}]
+  (let [setup (cond-> [(merge {:choice/key "i" :choice/group :setup}
+                              (if git-root
+                                {:choice/label "Set up jj in this git repo"
+                                 :choice/detail (str "jj git init --colocate in " git-root)
+                                 :choice/action [:init git-root]}
+                                {:choice/label "Create a jj repo here"
+                                 :choice/detail (str "jj git init in " dir)
+                                 :choice/action [:create dir]}))]
+                parent (conj {:choice/key "p"
+                              :choice/group :setup
+                              :choice/label "Open the jj repo it's inside"
+                              :choice/detail parent
+                              :choice/action [:open parent]}))
+        repos (concat (map vector (repeat :nearby) nearby)
+                      (map vector (repeat :recent) (take 9 recent)))]
+    {:mode/type :no-repo
+     :mode/dir dir
+     :mode/git-root git-root
+     :mode/selected (if (or git-root (empty? repos)) 0 (count setup))
+     :mode/choices
+     (into setup
+           (map-indexed (fn [i [group {repo :visit/dir :as visit}]]
+                          {:choice/key (when (< i 9) (str (inc i)))
+                           :choice/group group
+                           :choice/label (if (= :nearby group) (relative dir repo) repo)
+                           :choice/detail (visit-detail visit now)
+                           :choice/action [:open repo]}))
+           repos)}))
 
 (defn- choose [state {[op dir] :choice/action}]
   (open-repo state op dir))
@@ -995,17 +1055,14 @@
        (or (not synced?)
            (not-any? #(and (= bname (:bookmark/name %)) (:bookmark/remote %) (:bookmark/tracked? %)) bms))))
 
-(defn- bookmark-item [{:bookmark/keys [ref commit description]} value]
-  {:item/label (str ref "  " commit "  " description) :item/value value})
-
 (defn- bookmark-picker
   "[title items message-when-empty] of the picker for `purpose`."
-  [purpose bms]
+  [state purpose bms]
   (case purpose
     :bookmark-set ["Set bookmark (type a new name to create)"
                    (mapv #(bookmark-item % (:bookmark/ref %)) (remove :bookmark/remote bms))
                    nil]
-    :branch-diff ["Diff branch" (mapv #(bookmark-item % (:bookmark/ref %)) bms) nil]
+    :branch-diff ["Diff branch" (source-items state bms) nil]
     :push ["Push bookmark"
            (vec (for [b bms :when (outdated? bms b)]
                   (assoc (bookmark-item b (:bookmark/ref b))
@@ -1017,13 +1074,17 @@
                     (not (:bookmark/tracked? b)) (assoc :item/detail "untracked, pulling tracks it"))))
            "No remote bookmarks"]))
 
-(defn- bookmarks-loaded [state {:msg/keys [purpose result]}]
-  (if-let [err (:jj/error result)]
+(defn- bookmarks-loaded [state {:msg/keys [purpose result graph]}]
+  (if-let [err (or (:jj/error result) (:jj/error graph))]
     [(error state err) []]
-    (let [[title items empty-text] (bookmark-picker purpose (:jj/bookmarks result))]
+    (let [bms (:jj/bookmarks result)
+          [title items empty-text] (bookmark-picker state purpose bms)]
       (if (and empty-text (empty? items))
         [(info state empty-text) []]
-        [(open-picker (assoc state :app/message nil) purpose title items) []]))))
+        [(cond-> (open-picker (assoc state :app/message nil) purpose title items)
+           (= :branch-diff purpose) (update :app/mode assoc :mode/bookmarks bms)
+           (:jj/graph graph) (update :app/mode assoc :mode/graph (:jj/graph graph)))
+         []]))))
 
 (defn- recent-repos-loaded
   "Offers the visited repos, best first; picking one opens it."

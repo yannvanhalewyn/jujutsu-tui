@@ -6,6 +6,7 @@
   (:require
    [babashka.process :as p]
    [clojure.string :as str]
+   [jjtui.graph :as graph]
    [jjtui.log :as log]))
 
 ;; ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@
 (def CommitIds [:or [:map [:jj/ids [:vector :string]]] Failure])
 (def CommitId [:or [:map [:jj/id :string]] Failure])
 (def Description [:or [:map [:jj/description :string]] Failure])
+(def Graph [:or [:map [:jj/graph graph/Graph]] Failure])
 
 ;; ---------------------------------------------------------------------------
 ;; Commands
@@ -119,6 +121,27 @@
   (let [res (run dir ["bookmark" "list" "--all-remotes" "-T" bookmark-template])]
     (if (ok? res)
       {:jj/bookmarks (parse-bookmarks (:jj/out res))}
+      (error res))))
+
+(def ^:private graph-template
+  (str "commit_id ++ \"\\x1f\" ++ parents.map(|c| c.commit_id()).join(\" \") ++ \"\\x1f\" ++ "
+       "local_bookmarks.map(|b| b.name()).join(\" \") ++ \"\\n\""))
+
+(defn parse-graph [out]
+  (graph/build
+   (for [line (str/split-lines out)
+         :when (not (str/blank? line))
+         :let [[id parents bms] (str/split line #"\u001f" -1)]]
+     {:node/id id
+      :node/parents (vec (remove str/blank? (str/split parents #" ")))
+      :node/bookmarks (vec (remove str/blank? (str/split bms #" ")))})))
+
+(defn graph
+  "The jjtui.graph/Graph of the commits in trunk()..`heads`."
+  [dir heads]
+  (let [res (run dir ["log" "--no-graph" "-r" (str "trunk()..(" heads ")") "-T" graph-template])]
+    (if (ok? res)
+      {:jj/graph (parse-graph (:jj/out res))}
       (error res))))
 
 (defn commit-ids

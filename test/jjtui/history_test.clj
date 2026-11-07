@@ -26,6 +26,17 @@
     (is (= 4 (history/score #:visit{:count 1 :last (- now 1)} now)))
     (is (= 0.25 (history/score #:visit{:count 1 :last (- now (* 8 day))} now)))))
 
+(deftest nearby-first-test
+  (let [visit (fn [dir n] {:visit/dir dir :visit/count n :visit/last 0})
+        ranked [(visit "/code/app" 9) (visit "/work/api" 5) (visit "/workshop" 4)
+                (visit "/work/deep/lib" 2) (visit "/other" 1)]
+        {:keys [nearby others]} (history/nearby-first ranked ["/work/api" "/work/new"] "/work")]
+    (is (= ["/work/api" "/work/deep/lib" "/work/new"] (map :visit/dir nearby))
+        "visited repos under the dir by rank, at any depth, then the unvisited ones found there")
+    (is (= {:visit/dir "/work/new"} (last nearby)) "no visit stats for a repo never opened")
+    (is (= ["/code/app" "/workshop" "/other"] (map :visit/dir others))
+        "the rest keep their rank; a shared name prefix isn't nesting")))
+
 (deftest file-test
   (fs/with-temp-dir [tmp {}]
     (let [path (str (fs/path tmp "state" "history.edn"))

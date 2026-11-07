@@ -15,8 +15,8 @@
 (def usage
   "Usage: jjtui [options]
 
-Interactive TUI for jujutsu repositories. Run it inside a jj repo; in a git
-repo without jj it offers to set jj up, or to open another repo.
+Interactive TUI for jujutsu repositories. Run it inside a jj repo; anywhere
+else it offers to set jj up, or to open another repo.
 
 Options:
   -r, --revset REVSET   Log revset (default: jj's revsets.log)
@@ -79,8 +79,8 @@ Press ? inside the TUI for keybindings.")
   (System/exit 1))
 
 (defn- start-state
-  "The initial state for `cwd`: its jj repo, or the repo chooser when it's in
-   a git repo without jj."
+  "The initial state for `cwd`: its jj repo, or the repo chooser when it's
+   not in one."
   [cwd config config-error]
   (let [[kind found] (repo/find-start cwd)
         init #(app/init-state (merge {:config config :config-error config-error} %))]
@@ -88,13 +88,14 @@ Press ? inside the TUI for keybindings.")
       :open (let [opened (repo/open found (:config/log-template config))]
               (when-let [err (:jj/error opened)] (fail! err))
               (init {:repo opened}))
-      :choose (let [{:keys [git-root parent]} found
+      :choose (let [{:keys [dir git-root parent]} found
                     now (System/currentTimeMillis)
-                    recent (history/suggestions (history/read-visits (history/default-path))
-                                                now
-                                                (set (remove nil? [git-root parent])))]
-                (init {:mode (app/chooser {:git-root git-root :parent parent :recent recent :now now})}))
-      (fail! "not inside a jj or git repository"))))
+                    visited (history/suggestions (history/read-visits (history/default-path))
+                                                 now
+                                                 (set (remove nil? [git-root parent])))
+                    {:keys [nearby others]} (history/nearby-first visited (repo/child-repos dir) dir)]
+                (init {:mode (app/chooser {:dir dir :git-root git-root :parent parent
+                                           :nearby nearby :recent others :now now})})))))
 
 (defn -main [& args]
   (let [opts (parse-args args)]
