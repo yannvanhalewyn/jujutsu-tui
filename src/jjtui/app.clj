@@ -145,6 +145,11 @@
 
 (defn- ids [es] (mapv :change/id es))
 
+(defn- target-bookmarks
+  "The local bookmarks on the target changes."
+  [state]
+  (vec (distinct (mapcat :change/bookmarks (targets state)))))
+
 (defn- describe-entries [es]
   (str/join ", " (map :change/short-id es)))
 
@@ -173,12 +178,14 @@
      [{:fx/type :load-log :fx/gen gen :fx/params (log-params state)}]]))
 
 (defn- run-jj
-  "Runs a non-interactive jj command in the background, reloading after."
-  [state args {:keys [label success clear-marks?]}]
+  "Runs a non-interactive jj command in the background, reloading after.
+   `then` holds further commands, run while each succeeds."
+  [state args {:keys [label success clear-marks? then]}]
   (if (:app/busy state)
     [(error state (str "Busy: " (:app/busy state))) []]
     [(assoc state :app/busy (or label (str "jj " (first args))))
-     [{:fx/type :jj :fx/args args :fx/success success :fx/clear-marks? clear-marks?}]]))
+     [(cond-> {:fx/type :jj :fx/args args :fx/success success :fx/clear-marks? clear-marks?}
+        (seq then) (assoc :fx/then (vec then)))]]))
 
 (defn- run-exec
   "Suspends the TUI to run `argv` in the terminal."
@@ -596,9 +603,15 @@
              []]))))
     :push (let [ts (targets state)]
             (run-jj state (into ["git" "push"] (mapcat (fn [id] ["-r" id]) (ids ts))) {:label "Pushing"}))
-    :push-new (let [ts (targets state)]
-                (run-jj state (into ["git" "push"] (mapcat (fn [id] ["-c" id]) (ids ts))) {:label "Pushing"}))
+    :push-bookmarks
+    (if-let [bms (seq (target-bookmarks state))]
+      (run-jj state (into ["git" "push"] (mapcat (fn [b] ["-b" b]) bms)) {:label "Pushing"})
+      [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :push}]])
     :fetch (run-jj state ["git" "fetch"] {:label "Fetching"})
+    :pull
+    (if-let [bms (seq (target-bookmarks state))]
+      (run-jj state (into ["git" "fetch"] (mapcat (fn [b] ["-b" b]) bms)) {:label "Pulling"})
+      [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :pull}]])
 
     [state []]))
 
@@ -638,6 +651,13 @@
       :branch-diff (open-diff state (branch-target value))
       :bookmark-op (bookmark-chosen state op value)
       :repo (open-repo state :open value)
+      :push (run-jj state ["git" "push" "-b" value] {:label "Pushing"})
+      :pull
+      (let [{bname :bookmark/name :bookmark/keys [remote ref tracked?]} value]
+        (run-jj state ["git" "fetch" "--remote" remote "-b" bname]
+                (if tracked?
+                  {:label "Pulling"}
+                  {:label "Pulling" :then [["bookmark" "track" ref]] :success (str "Pulled and tracked " ref)})))
       :bookmark-set
       (with-entry state
         (fn [entry]
@@ -925,17 +945,42 @@
         state (cond-> state (and ok? clear-marks?) (update-repo assoc :repo/marks #{}))]
     (reload state)))
 
+(defn- outdated?
+  "A local bookmark the remote lacks or has elsewhere."
+  [bms {bname :bookmark/name :bookmark/keys [remote synced?]}]
+  (and (nil? remote)
+       (or (not synced?)
+           (not-any? #(and (= bname (:bookmark/name %)) (:bookmark/remote %) (:bookmark/tracked? %)) bms))))
+
+(defn- bookmark-item [{:bookmark/keys [ref commit description]} value]
+  {:item/label (str ref "  " commit "  " description) :item/value value})
+
+(defn- bookmark-picker
+  "[title items message-when-empty] of the picker for `purpose`."
+  [purpose bms]
+  (case purpose
+    :bookmark-set ["Set bookmark (type a new name to create)"
+                   (mapv #(bookmark-item % (:bookmark/ref %)) (remove :bookmark/remote bms))
+                   nil]
+    :branch-diff ["Diff branch" (mapv #(bookmark-item % (:bookmark/ref %)) bms) nil]
+    :push ["Push bookmark"
+           (vec (for [b bms :when (outdated? bms b)]
+                  (assoc (bookmark-item b (:bookmark/ref b))
+                         :item/detail (if (:bookmark/synced? b) "not on remote" "out of sync"))))
+           "Every bookmark is pushed"]
+    :pull ["Pull bookmark"
+           (vec (for [b bms :when (:bookmark/remote b)]
+                  (cond-> (bookmark-item b b)
+                    (not (:bookmark/tracked? b)) (assoc :item/detail "untracked, pulling tracks it"))))
+           "No remote bookmarks"]))
+
 (defn- bookmarks-loaded [state {:msg/keys [purpose result]}]
   (if-let [err (:jj/error result)]
     [(error state err) []]
-    (let [set? (= :bookmark-set purpose)
-          bms (cond->> (:jj/bookmarks result) set? (remove :bookmark/remote))
-          items (vec (for [{:bookmark/keys [ref commit description]} bms]
-                       {:item/label (str ref "  " commit "  " description)
-                        :item/value ref}))]
-      [(-> (assoc state :app/message nil)
-           (open-picker purpose (if set? "Set bookmark (type a new name to create)" "Diff branch") items))
-       []])))
+    (let [[title items empty-text] (bookmark-picker purpose (:jj/bookmarks result))]
+      (if (and empty-text (empty? items))
+        [(info state empty-text) []]
+        [(open-picker (assoc state :app/message nil) purpose title items) []]))))
 
 (defn- recent-repos-loaded
   "Offers the visited repos, best first; picking one opens it."

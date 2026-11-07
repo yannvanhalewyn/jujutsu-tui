@@ -441,7 +441,7 @@ const ROADMAP = [
   { title: 'Split', area: 'operations', status: 'done', notes: 'X: jj split -r X (interactive).' },
   { title: 'Undo / redo', area: 'operations', status: 'done', notes: 'u / U: jj undo / jj redo' },
   { title: 'Bookmarks: set / create / delete / rename', area: 'bookmarks', status: 'done', notes: 'b fuzzy picker (set --allow-backwards or create); B menu: d delete, r rename.' },
-  { title: 'Push / fetch', area: 'remote', status: 'done', notes: 'p push -r, P push -c (new bookmark), f fetch.' },
+  { title: 'Push / fetch / pull', area: 'remote', status: 'done', notes: 'p push -r; P push the bookmarks on X (else pick an unpushed one); f fetch; F pull the bookmarks on X (else pick a remote one).' },
   { title: 'Ignore-immutable toggle', area: 'operations', status: 'done', notes: '! toggles --ignore-immutable for edit/rebase/squash/describe/abandon.' },
   { title: 'Revset prompt', area: 'log', status: 'done', notes: 'L sets the log revset; empty resets to default.' },
   { title: 'Config file', area: 'config', status: 'done', notes: '$XDG_CONFIG_HOME/jjtui/config.edn, $JJTUI_CONFIG or --config; #env reader.' },
@@ -500,7 +500,7 @@ const KEYMAP = [
     { k: 'm / space', d: 'toggle mark on change, move down' },
     { k: 'c', d: 'clear marks' },
     { k: 'esc', d: 'clear marks (when no mode or search is active)' },
-  ], note: 'Batch semantics: with marks, `enter` (combined diff), `n` (merge: new change with all marks as parents), `a` (abandon all), `r` (rebase marks), `s` (squash marks into cursor change), `S` (squash marks into picked target), `p`/`P` (push) operate on the marks; otherwise on the cursor change. Marks are cleared after mutating batch ops.' },
+  ], note: 'Batch semantics: with marks, `enter` (combined diff), `n` (merge: new change with all marks as parents), `a` (abandon all), `r` (rebase marks), `s` (squash marks into cursor change), `S` (squash marks into picked target), `p`/`P` (push) and `F` (pull) operate on the marks; otherwise on the cursor change. Marks are cleared after mutating batch ops.' },
   { id: 'ops', title: 'Change operations', sub: 'mnemonic', cols: ['Key', 'Mnemonic', 'jj command'], rows: [
     { k: 'd', m: 'describe', d: 'popup editing the first line of X\'s description (the rest is kept): enter = `jj describe -r X -m …`, ctrl+e = `jj describe -r X --editor -m …` (jj\'s configured editor, e.g. $EDITOR), esc = cancel' },
     { k: 'n', m: 'new', d: '`jj new X` / `jj new M1 M2 …`' },
@@ -517,8 +517,9 @@ const KEYMAP = [
     { k: 'b', m: 'bookmark', d: 'fuzzy picker of bookmarks; enter moves selected bookmark to X (`jj bookmark set --allow-backwards`), or creates the typed name (`jj bookmark create`; the "+ create" item is listed after the matches)' },
     { k: 'B', m: 'Bookmark…', d: 'menu: d = delete (confirm), r = rename (prompt prefilled with the name); several bookmarks on X → picker first' },
     { k: 'p', m: 'push', d: '`jj git push -r X…`' },
-    { k: 'P', m: 'Push new', d: '`jj git push -c X…` (creates bookmark from change id)' },
+    { k: 'P', m: 'Push bookmarks', d: '`jj git push -b B…` for the bookmarks on X; none → picker of local bookmarks not yet pushed or out of sync with their remote' },
     { k: 'f', m: 'fetch', d: '`jj git fetch`' },
+    { k: 'F', m: 'pull', d: '`jj git fetch -b B…` for the bookmarks on X (tracked ones move to the remote); none → picker of remote bookmarks: `jj git fetch --remote R -b B`, then `jj bookmark track B@R` if untracked' },
     { k: '!', m: 'force', d: 'toggle `--ignore-immutable` for edit/rebase/squash/describe/abandon/split/resolve (jjtui never blocks immutable changes itself; jj\'s error is shown)' },
   ]},
   { id: 'modal', title: 'Modal keys', cols: ['Key', 'Mode', 'Action'], rows: [
@@ -1110,8 +1111,19 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
         ['r', 'rename', () => withBookmarkOn(c, 'Rename bookmark', b => { S.mode = 'input'; S.input = { prompt: 'rename ' + b + ' to: ', value: b, onSubmit: v => v.trim() && v.trim() !== b ? run('jj bookmark rename ' + b + ' ' + v.trim()) : msg('rename cancelled') }; })],
       ]); break;
       case 'p': { const t = targets(); run('jj git push ' + t.map(i => '-r ' + CH[i].id).join(' '), { after: () => S.marks.clear() }); break; }
-      case 'P': { const t = targets(); run('jj git push ' + t.map(i => '-c ' + CH[i].id).join(' '), { after: () => S.marks.clear() }); break; }
+      case 'P': {
+        const bms = [...new Set(targets().flatMap(i => CH[i].bm))];
+        if (bms.length) run('jj git push ' + bms.map(b => '-b ' + b).join(' '));
+        else openPicker('Push bookmark', bookmarks().map(b => ({ label: b.name })), it => run('jj git push -b ' + it.label));
+        break;
+      }
       case 'f': run('jj git fetch'); break;
+      case 'F': {
+        const bms = [...new Set(targets().flatMap(i => CH[i].bm))];
+        if (bms.length) run('jj git fetch ' + bms.map(b => '-b ' + b).join(' '));
+        else openPicker('Pull bookmark', bookmarks().map(b => ({ label: b.name + '@origin' })), it => run('jj git fetch --remote origin -b ' + it.label.replace(/@origin$/, '')));
+        break;
+      }
       case '!': S.ignoreImm = !S.ignoreImm; msg('--ignore-immutable ' + (S.ignoreImm ? 'ON' : 'off')); break;
       default: return false;
     }

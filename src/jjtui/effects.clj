@@ -23,10 +23,11 @@
   [:map
    [:fx/type [:= :jj]]
    [:fx/args [:vector :string]]
+   [:fx/then {:optional true :doc "More jj commands, each run once the previous one succeeded"} [:vector [:vector :string]]]
    [:fx/success {:doc "Message on success, else jj's output"} [:maybe :string]]
    [:fx/clear-marks? [:maybe :boolean]]])
 
-(def BookmarkPurpose [:enum :branch-diff :bookmark-set])
+(def BookmarkPurpose [:enum :branch-diff :bookmark-set :push :pull])
 
 (def Msg
   "The messages effects send back to jjtui.app/update-state."
@@ -138,7 +139,10 @@
       :jj
       (program/cmd #(hash-map :type :msg/jj-done
                               :msg/effect effect
-                              :msg/result (jj/run dir (:fx/args effect))))
+                              :msg/result (reduce (fn [res args]
+                                                    (if (zero? (:jj/exit res)) (jj/run dir args) (reduced res)))
+                                                  (jj/run dir (:fx/args effect))
+                                                  (:fx/then effect))))
 
       :bookmarks
       (program/cmd #(hash-map :type :msg/bookmarks-loaded

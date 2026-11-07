@@ -262,13 +262,13 @@
 (deftest help-search-test
   (let [[s] (press (loaded) "?" "/" "p" "u" "s" "h")]
     (testing "typing filters the bindings, matching group titles too"
-      (is (str/includes? (help-text s) "Push new (-c)"))
+      (is (str/includes? (help-text s) "Push bookmarks of change"))
       (is (not (str/includes? (help-text s) "Rebase"))))
     (testing "letters go to the search, not to the help keys"
       (is (= :help (get-in (first (press s "q")) [:app/mode :mode/type]))))
     (testing "enter keeps the filter; then esc clears it before closing"
       (let [[s] (press s "enter")]
-        (is (str/includes? (help-text s) "Push new (-c)"))
+        (is (str/includes? (help-text s) "Push bookmarks of change"))
         (is (= :help (get-in (first (press s "j")) [:app/mode :mode/type])) "j scrolls again")
         (let [[s] (press s "escape")]
           (is (= :help (get-in s [:app/mode :mode/type])))
@@ -277,11 +277,13 @@
     (testing "a query matching nothing says so"
       (is (str/includes? (help-text (first (press s "z" "z" "z"))) "no matching keys")))))
 
-(defn- bookmark [bname remote]
+(defn- bookmark [bname remote & {:keys [tracked? synced?] :or {tracked? true synced? true}}]
   {:bookmark/name bname
    :bookmark/remote remote
    :bookmark/ref (if remote (str bname "@" remote) bname)
    :bookmark/commit "c"
+   :bookmark/tracked? (boolean (and remote tracked?))
+   :bookmark/synced? synced?
    :bookmark/description "d"})
 
 (deftest bookmark-picker-test
@@ -297,6 +299,53 @@
     (testing "picking an existing one moves it"
       (let [[_ fx] (press s "f" "enter")]
         (is (= ["bookmark" "set" "feat" "-r" "wwww" "--allow-backwards"] (jj-args fx)))))))
+
+(deftest push-bookmarks-test
+  (testing "pushes the bookmarks on the change"
+    (is (= ["git" "push" "-b" "feat"] (jj-args (second (press (loaded) "j" "P"))))))
+  (testing "without any, offers the local bookmarks the remote lacks or has elsewhere"
+    (let [[s fx] (press (loaded) "P")
+          _ (is (= [{:fx/type :bookmarks :fx/purpose :push}] fx))
+          [s] (press s {:type :msg/bookmarks-loaded
+                        :msg/purpose :push
+                        :msg/result {:jj/bookmarks [(bookmark "main" nil)
+                                                    (bookmark "main" "origin")
+                                                    (bookmark "ahead" nil :synced? false)
+                                                    (bookmark "ahead" "origin" :synced? false)
+                                                    (bookmark "new" nil)
+                                                    (bookmark "gone" "origin" :tracked? false :synced? false)]}})]
+      (is (= [["ahead" "out of sync"] ["new" "not on remote"]]
+             (map (juxt :item/value :item/detail) (st/picker-matches (:app/mode s)))))
+      (is (= ["git" "push" "-b" "new"] (jj-args (second (press s "n" "e" "w" "enter")))))))
+  (testing "says so when everything is pushed"
+    (let [[s] (press (loaded) "P" {:type :msg/bookmarks-loaded
+                                   :msg/purpose :push
+                                   :msg/result {:jj/bookmarks [(bookmark "main" nil) (bookmark "main" "origin")]}})]
+      (is (nil? (:app/mode s)))
+      (is (= "Every bookmark is pushed" (get-in s [:app/message :message/text]))))))
+
+(deftest pull-test
+  (testing "fetches the bookmarks on the marked changes"
+    (let [[s fx] (press (loaded) "m" "m" "F")]
+      (is (= #{"wwww" "bbbb"} (get-in s [:app/repo :repo/marks])))
+      (is (= ["git" "fetch" "-b" "feat"] (jj-args fx)))))
+  (let [[s fx] (press (loaded) "F")
+        _ (is (= [{:fx/type :bookmarks :fx/purpose :pull}] fx))
+        [s] (press s {:type :msg/bookmarks-loaded
+                      :msg/purpose :pull
+                      :msg/result {:jj/bookmarks [(bookmark "main" nil)
+                                                  (bookmark "main" "origin")
+                                                  (bookmark "theirs" "upstream" :tracked? false :synced? false)]}})]
+    (testing "offers the remote bookmarks"
+      (is (= ["main@origin  c  d" "theirs@upstream  c  d"] (map :item/label (st/picker-matches (:app/mode s))))))
+    (testing "a tracked one is fetched from its remote"
+      (let [[_ [fx]] (press s "m" "a" "i" "n" "enter")]
+        (is (= ["git" "fetch" "--remote" "origin" "-b" "main"] (:fx/args fx)))
+        (is (nil? (:fx/then fx)))))
+    (testing "an untracked one is tracked after fetching, so a local bookmark follows it"
+      (let [[_ [fx]] (press s "t" "h" "enter")]
+        (is (= ["git" "fetch" "--remote" "upstream" "-b" "theirs"] (:fx/args fx)))
+        (is (= [["bookmark" "track" "theirs@upstream"]] (:fx/then fx)))))))
 
 (deftest repo-switch-test
   (let [[s fx] (press (loaded) "w")

@@ -26,6 +26,8 @@
    [:bookmark/remote [:maybe :string]]
    [:bookmark/ref {:doc "name, or name@remote"} :string]
    [:bookmark/commit {:doc "Short commit id, empty when conflicted"} :string]
+   [:bookmark/tracked? {:doc "Remote: tracked by a local bookmark. Local: always false"} :boolean]
+   [:bookmark/synced? {:doc "Local: at the target of every tracked remote. Remote: tracked and at the local target"} :boolean]
    [:bookmark/description :string]])
 
 (def Bookmarks [:or [:map [:jj/bookmarks [:vector Bookmark]]] Failure])
@@ -93,17 +95,20 @@
   (str "if(self.remote() != \"git\", "
        "self.name() ++ \"\\x1f\" ++ coalesce(self.remote(), \"\") ++ \"\\x1f\" ++ "
        "if(self.normal_target(), self.normal_target().commit_id().short(8), \"\") ++ \"\\x1f\" ++ "
+       "self.tracked() ++ \"\\x1f\" ++ self.synced() ++ \"\\x1f\" ++ "
        "if(self.normal_target(), self.normal_target().description().first_line(), \"\") ++ \"\\n\")"))
 
 (defn parse-bookmarks [out]
   (->> (str/split-lines out)
        (remove str/blank?)
        (map (fn [line]
-              (let [[bname remote sha desc] (str/split line #"\u001f" -1)]
+              (let [[bname remote sha tracked synced desc] (str/split line #"\u001f" -1)]
                 {:bookmark/name bname
                  :bookmark/remote (not-empty remote)
                  :bookmark/ref (if (str/blank? remote) bname (str bname "@" remote))
                  :bookmark/commit sha
+                 :bookmark/tracked? (= "true" tracked)
+                 :bookmark/synced? (= "true" synced)
                  :bookmark/description desc})))
        distinct
        vec))

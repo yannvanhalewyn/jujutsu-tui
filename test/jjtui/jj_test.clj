@@ -43,5 +43,9 @@
       (testing "bookmarks, local and remote, without @git"
         (let [res (jj/bookmarks dir)]
           (is (nil? (explain jj/Bookmarks res)))
-          (is (= #{"main" "main@origin" "feature/login" "feature/docs"}
-                 (set (map :bookmark/ref (:jj/bookmarks res)))))))))))
+          (is (= {"main" [false true] "main@origin" [true true] "feature/login" [false true] "feature/docs" [false true]}
+                 (into {} (map (juxt :bookmark/ref (juxt :bookmark/tracked? :bookmark/synced?))) (:jj/bookmarks res))))
+          (jj/run dir ["bookmark" "set" "main" "-r" "feature/login"])
+          (is (= [false false] ((juxt :bookmark/tracked? :bookmark/synced?)
+                                (first (filter #(= "main" (:bookmark/ref %)) (:jj/bookmarks (jj/bookmarks dir))))))
+              "a local bookmark moved since the push is out of sync"))))))

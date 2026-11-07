@@ -65,8 +65,9 @@
     [[["b"] :bookmark/set "Set / create bookmark"]
      [["B"] :bookmark/menu "Bookmark… (delete / rename)"]
      [["p"] :push "Push"]
-     [["P"] :push-new "Push new (-c)"]
-     [["f"] :fetch "Fetch"]]]])
+     [["P"] :push-bookmarks "Push bookmarks of change, else pick one"]
+     [["f"] :fetch "Fetch"]
+     [["F"] :pull "Pull bookmarks of change, else pick one"]]]])
 
 (def keymap
   "key name -> action"

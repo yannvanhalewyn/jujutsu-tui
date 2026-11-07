@@ -62,7 +62,7 @@
            [:mode/source-flag [:enum "-r" "-s" "-b"]]]]
    [:picker [:map
              [:mode/type [:= :picker]]
-             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set :repo]]
+             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set :push :pull :repo]]
              [:mode/title :string]
              [:mode/items [:vector PickerItem]]
              [:mode/selected :int]
