@@ -53,11 +53,10 @@
 ;; User config
 
 (def defaults
-  "The user config used for keys config.edn leaves out."
+  "The user config used for keys config.edn leaves out. `presets` add to
+   :diff-tools when their program is installed."
   {:diff-tool :jj
    :diff-tools {:jj (into paged-jj ["diff" "-r" "$revset" "$files"])
-                :difftastic (into paged-jj ["diff" "--tool" "difft" "-r" "$revset" "$files"])
-                :delta "jj diff --git -r $revset $files | delta --paging=always"
                 :difftool ["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]}
    :preview-command ["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]
    :revset nil
@@ -65,6 +64,33 @@
    :show-files false
    :split false
    :split-ratio 0.5})
+
+(def presets
+  "Diff tools offered when `:program` is on PATH. A key config.edn also defines
+   keeps the user's tool. The GUI tools run through jj's built-in
+   merge-tools.<name> configs, so no colocated git repo is needed."
+  {:difftastic {:program "difft"
+                :tool (into paged-jj ["diff" "--tool" "difft" "-r" "$revset" "$files"])}
+   :delta {:program "delta"
+           :tool "jj diff --git -r $revset $files | delta --paging=always"}
+   :diff-so-fancy {:program "diff-so-fancy"
+                   :tool "jj diff --git --color=always -r $revset $files | diff-so-fancy | less -R"}
+   :meld {:program "meld"
+          :tool ["jj" "diff" "--tool" "meld" "-r" "$revset" "$files"]}
+   :kdiff3 {:program "kdiff3"
+            :tool ["jj" "diff" "--tool" "kdiff3" "-r" "$revset" "$files"]}
+   :vscode {:program "code"
+            :tool ["jj" "diff" "--tool" "vscode" "-r" "$revset" "$files"]}})
+
+(defn detected-tools
+  "The `presets` whose program `installed?` accepts, as user-config tools."
+  [installed?]
+  (into {} (for [[k {:keys [program tool]}] presets
+                 :when (installed? program)]
+             [k tool])))
+
+(defn- on-path? [program]
+  (some? (fs/which program)))
 
 (defn config-path
   "The config file to read: `override`, else $JJTUI_CONFIG, else
@@ -80,10 +106,13 @@
     b))
 
 (defn merge-config
-  "User config over the defaults. Nested maps merge, so adding one diff tool
-   keeps the built-in ones."
-  [user]
-  (deep-merge defaults (or user {})))
+  "User config over the defaults plus the presets `installed?` finds (default:
+   programs on PATH). Nested maps merge, so adding one diff tool keeps the
+   built-in ones, and a user tool replaces a preset of the same key."
+  ([user] (merge-config user on-path?))
+  ([user installed?]
+   (deep-merge (update defaults :diff-tools merge (detected-tools installed?))
+               (or user {}))))
 
 (defn- user->tool
   "A diff tool is a command template, or {:cmd template :wait? bool}."
@@ -112,14 +141,14 @@
   [override]
   (let [path (config-path override)]
     (if-not (fs/exists? path)
-      {:config (user->internal defaults) :path path}
+      {:config (user->internal (merge-config nil)) :path path}
       (try
         {:config (user->internal
                   (merge-config (edn/read-string {:readers {'env #(System/getenv (str %))}}
                                                  (slurp path))))
          :path path}
         (catch Exception e
-          {:config (user->internal defaults)
+          {:config (user->internal (merge-config nil))
            :path path
            :error (str "Could not read " path ": " (ex-message e))})))))
 

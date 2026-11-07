@@ -33,10 +33,19 @@
 
 (deftest merge-config-test
   (let [merged (config/merge-config {:diff-tool :mine
-                                     :diff-tools {:mine ["my-tool" "$revset"]}})]
+                                     :diff-tools {:mine ["my-tool" "$revset"]}}
+                                    (constantly false))]
     (is (= :mine (:diff-tool merged)))
     (is (= ["my-tool" "$revset"] (get-in merged [:diff-tools :mine])))
-    (is (contains? (:diff-tools merged) :difftastic) "built-in tools are kept")))
+    (is (contains? (:diff-tools merged) :jj) "built-in tools are kept"))
+  (testing "presets are added only when their program is installed"
+    (let [tools (:diff-tools (config/merge-config nil #{"difft"}))]
+      (is (= (get-in config/presets [:difftastic :tool]) (:difftastic tools)))
+      (is (not (contains? tools :delta)))))
+  (testing "a user tool keeps its key over a detected preset"
+    (let [mine {:cmd ["difft" "--my-flags"] :wait? true}]
+      (is (= mine (get-in (config/merge-config {:diff-tools {:difftastic mine}} #{"difft"})
+                          [:diff-tools :difftastic]))))))
 
 (deftest user->internal-test
   (let [cfg (config/user->internal
