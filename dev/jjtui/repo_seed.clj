@@ -23,9 +23,15 @@
   [dir]
   (str (fs/normalize (fs/absolutize dir)) "-origin.git"))
 
+(def gitignore
+  "Written by `init!` so tool caches created while playing in a seed repo
+   don't get snapshotted into its changes."
+  ".cpcache/\n")
+
 (defn init!
-  "Creates an empty colocated jj repo at `dir` with a bare `origin` remote next
-   to it (see `origin-dir`), replacing whatever is at either path. Returns dir."
+  "Creates a colocated jj repo at `dir` with a bare `origin` remote next to it
+   (see `origin-dir`), replacing whatever is at either path. The working copy
+   starts with just `gitignore` as `.gitignore`. Returns dir."
   [dir]
   (let [origin (origin-dir dir)]
     (fs/delete-tree dir)
@@ -34,6 +40,7 @@
     (p/check (p/process ["git" "init" "--bare" "-q" origin] {:out :string :err :string}))
     (jj dir "git" "init" "--colocate")
     (jj dir "git" "remote" "add" "origin" origin)
+    (spit (fs/file dir ".gitignore") gitignore)
     (str dir)))
 
 (defn write-files!
