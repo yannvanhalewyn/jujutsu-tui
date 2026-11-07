@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "dev"]
  :deps {io.github.timokramer/charm.clj {:git/tag "v0.2.125" :git/sha "2116edb"}}
  :tasks
  {start {:doc "Run jjtui in the current directory"
