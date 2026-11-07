@@ -2,7 +2,9 @@
   (:require
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
-   [jjtui.log :as log]))
+   [jjtui.log :as log]
+   [malli.core :as m]
+   [malli.error :as me]))
 
 (defn marker
   "The hidden fields jj prints for a change, as the template produces them."
@@ -29,29 +31,30 @@
              (str "◆  " (marker {:id "cccc3333" :commit "c3" :immutable? true}) "cccc3333 main c3")]))
 
 (deftest parse-test
-  (let [{:keys [entries rows]} (log/parse sample)]
+  (let [{:log/keys [entries rows] :as parsed} (log/parse sample)]
+    (is (nil? (me/humanize (m/explain log/Log parsed))) "matches the Log schema")
     (testing "one entry per change, with its fields"
-      (is (= ["aaaa1111" "bbbb2222" "cccc3333"] (map :change-id entries)))
-      (is (:working-copy? (first entries)))
-      (is (= ["feat" "wip"] (:bookmarks (second entries))))
-      (is (= ["c3"] (:parents (second entries))))
-      (is (= "Add thing" (:description (second entries))))
-      (is (:immutable? (nth entries 2)))
-      (is (= [] (:parents (nth entries 2)))))
+      (is (= ["aaaa1111" "bbbb2222" "cccc3333"] (map :change/id entries)))
+      (is (:change/working-copy? (first entries)))
+      (is (= ["feat" "wip"] (:change/bookmarks (second entries))))
+      (is (= ["c3"] (:change/parents (second entries))))
+      (is (= "Add thing" (:change/description (second entries))))
+      (is (:change/immutable? (nth entries 2)))
+      (is (= [] (:change/parents (nth entries 2)))))
 
     (testing "markers are removed from the displayed node line"
-      (is (= "@  aaaa1111 me 12:00 c1" (:line (first rows))))
-      (is (not-any? #(and (:line %) (re-find #"[\u001c-\u001f]" (:line %))) rows)))
+      (is (= "@  aaaa1111 me 12:00 c1" (:row/line (first rows))))
+      (is (not-any? #(and (:row/line %) (re-find #"[\u001c-\u001f]" (:row/line %))) rows)))
 
     (testing "rows are classified and attached to their change"
-      (is (= [:node :text :node :text :file :file :other :node] (map :kind rows)))
-      (is (= [0 0 1 1 1 1 nil 2] (map :entry rows))))
+      (is (= [:node :text :node :text :file :file :other :node] (map :row/kind rows)))
+      (is (= [0 0 1 1 1 1 nil 2] (map :row/entry rows))))
 
     (testing "file rows keep the graph prefix and rename source"
-      (let [[modified renamed] (filter #(= :file (:kind %)) rows)]
-        (is (= "│  " (:prefix modified)))
-        (is (= {:status "M" :path "src/a.clj" :source nil} (:file modified)))
-        (is (= {:status "R" :path "new.md" :source "old.md"} (:file renamed)))))))
+      (let [[modified renamed] (filter #(= :file (:row/kind %)) rows)]
+        (is (= "│  " (:row/prefix modified)))
+        (is (= {:file/status "M" :file/path "src/a.clj" :file/source nil} (:row/file modified)))
+        (is (= {:file/status "R" :file/path "new.md" :file/source "old.md"} (:row/file renamed)))))))
 
 (deftest template-test
   (testing "file lines only for the expanded changes"

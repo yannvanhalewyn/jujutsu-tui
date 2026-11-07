@@ -16,17 +16,17 @@
 
 (def ^:private entry-fields
   "Fields of the hidden marker, in order, with their template expressions."
-  [[:change-id "change_id"]
-   [:short-id "change_id.shortest(8)"]
-   [:commit-id "commit_id"]
-   [:parents "parents.map(|c| c.commit_id()).join(\",\")"]
-   [:immutable? "immutable"]
-   [:empty? "empty"]
-   [:conflict? "conflict"]
-   [:divergent? "divergent"]
-   [:working-copy? "current_working_copy"]
-   [:bookmarks "local_bookmarks.map(|b| b.name()).join(\" \")"]
-   [:description "description.first_line()"]])
+  [[:change/id "change_id"]
+   [:change/short-id "change_id.shortest(8)"]
+   [:change/commit-id "commit_id"]
+   [:change/parents "parents.map(|c| c.commit_id()).join(\",\")"]
+   [:change/immutable? "immutable"]
+   [:change/empty? "empty"]
+   [:change/conflict? "conflict"]
+   [:change/divergent? "divergent"]
+   [:change/working-copy? "current_working_copy"]
+   [:change/bookmarks "local_bookmarks.map(|b| b.name()).join(\" \")"]
+   [:change/description "description.first_line()"]])
 
 ;; ---------------------------------------------------------------------------
 ;; Schemas (malli, plain data: validated in the tests, not at runtime)
@@ -34,38 +34,38 @@
 (def Entry
   "A change, parsed from the hidden marker."
   [:map
-   [:index :int]
-   [:change-id :string]
-   [:short-id :string]
-   [:commit-id :string]
-   [:parents [:vector :string]]
-   [:immutable? :boolean]
-   [:empty? :boolean]
-   [:conflict? :boolean]
-   [:divergent? :boolean]
-   [:working-copy? :boolean]
-   [:bookmarks [:vector :string]]
-   [:description :string]])
+   [:change/index {:doc "Position in :log/entries"} :int]
+   [:change/id :string]
+   [:change/short-id :string]
+   [:change/commit-id :string]
+   [:change/parents {:doc "Commit ids"} [:vector :string]]
+   [:change/immutable? :boolean]
+   [:change/empty? :boolean]
+   [:change/conflict? :boolean]
+   [:change/divergent? :boolean]
+   [:change/working-copy? :boolean]
+   [:change/bookmarks [:vector :string]]
+   [:change/description :string]])
 
 (def FileChange
   [:map
-   [:status [:enum "M" "A" "D" "R" "C" "?"]]
-   [:path :string]
-   [:source [:maybe :string]]])
+   [:file/status [:enum "M" "A" "D" "R" "C" "?"]]
+   [:file/path :string]
+   [:file/source {:doc "Path before a rename or copy"} [:maybe :string]]])
 
 (def Row
-  "A display line. :entry indexes into the log's :entries."
-  [:multi {:dispatch :kind}
-   [:node [:map [:kind [:= :node]] [:entry :int] [:line :string]]]
-   [:text [:map [:kind [:= :text]] [:entry :int] [:line :string]]]
-   [:file [:map [:kind [:= :file]] [:entry :int] [:prefix :string] [:file FileChange]]]
-   [:other [:map [:kind [:= :other]] [:line :string]]]])
+  "A display line. :row/entry indexes into :log/entries."
+  [:multi {:dispatch :row/kind}
+   [:node [:map [:row/kind [:= :node]] [:row/entry :int] [:row/line :string]]]
+   [:text [:map [:row/kind [:= :text]] [:row/entry :int] [:row/line :string]]]
+   [:file [:map [:row/kind [:= :file]] [:row/entry :int] [:row/prefix :string] [:row/file FileChange]]]
+   [:other [:map [:row/kind [:= :other]] [:row/line :string]]]])
 
 (def Log
   "What `parse` returns."
   [:map
-   [:entries [:vector Entry]]
-   [:rows [:vector Row]]])
+   [:log/entries [:vector Entry]]
+   [:log/rows [:vector Row]]])
 
 (defn files-revset
   "Revset matching the changes whose file list is expanded."
@@ -95,64 +95,64 @@
   (let [values (str/split s (re-pattern field-sep) -1)
         m (zipmap (map first entry-fields) values)]
     (-> m
-        (update :parents #(if (str/blank? %) [] (str/split % #",")))
-        (update :bookmarks #(if (str/blank? %) [] (str/split % #" ")))
-        (update :immutable? parse-bool)
-        (update :empty? parse-bool)
-        (update :conflict? parse-bool)
-        (update :divergent? parse-bool)
-        (update :working-copy? parse-bool))))
+        (update :change/parents #(if (str/blank? %) [] (str/split % #",")))
+        (update :change/bookmarks #(if (str/blank? %) [] (str/split % #" ")))
+        (update :change/immutable? parse-bool)
+        (update :change/empty? parse-bool)
+        (update :change/conflict? parse-bool)
+        (update :change/divergent? parse-bool)
+        (update :change/working-copy? parse-bool))))
 
 (def ^:private status-letters
   {"modified" "M" "added" "A" "removed" "D" "renamed" "R" "copied" "C"})
 
-(defn- parse-file-line [line]
+(defn- file-row [line entry]
   (let [idx (str/index-of line file-start)
-        prefix (subs line 0 idx)
         [status source path] (str/split (subs line (inc idx)) (re-pattern field-sep) -1)]
-    {:prefix prefix
-     :file {:status (get status-letters status "?")
-            :path path
-            :source (when (not= source path) source)}}))
+    {:row/kind :file
+     :row/entry entry
+     :row/prefix (subs line 0 idx)
+     :row/file {:file/status (get status-letters status "?")
+                :file/path path
+                :file/source (when (not= source path) source)}}))
 
 (defn parse
-  "Parses `jj log` output (with the template above) into
-   {:entries [entry] :rows [row]}.
+  "Parses `jj log` output (with the template above) into a Log.
 
-   Rows have :kind :node (first line of a change), :text (other lines of a
-   change), :file (a file of a change) or :other (anything outside a change),
-   the :entry index, and :line, the text to display. File rows carry :file
-   and :prefix, the graph to the left of the file."
+   Rows have :row/kind :node (first line of a change), :text (other lines of
+   a change), :file (a file of a change) or :other (anything outside a
+   change), the :row/entry index, and :row/line, the text to display. File
+   rows carry :row/file and :row/prefix, the graph to the left of the file."
   [output]
   (loop [[line & more :as lines] (str/split-lines (or output ""))
          entries []
          rows []]
     (if (empty? lines)
-      {:entries entries :rows rows}
-      (let [current (when (seq entries) (dec (count entries)))]
+      {:log/entries entries :log/rows rows}
+      (let [current (when (seq entries) (dec (count entries)))
+            other {:row/kind :other :row/line line}]
         (cond
           (str/includes? line entry-start)
           (if-let [[whole fields] (re-find marker-pattern line)]
-            (let [entry (assoc (parse-entry-fields fields) :index (count entries))]
+            (let [entry (assoc (parse-entry-fields fields) :change/index (count entries))]
               (recur more
                      (conj entries entry)
-                     (conj rows {:kind :node
-                                 :entry (:index entry)
-                                 :line (str/replace-first line whole "")})))
-            (recur more entries (conj rows {:kind :other :line line})))
+                     (conj rows {:row/kind :node
+                                 :row/entry (:change/index entry)
+                                 :row/line (str/replace-first line whole "")})))
+            (recur more entries (conj rows other)))
 
           (and current (str/includes? line file-start))
-          (let [{:keys [prefix file]} (parse-file-line line)]
-            (recur more entries (conj rows {:kind :file :entry current :prefix prefix :file file})))
+          (recur more entries (conj rows (file-row line current)))
 
           (str/includes? line "(elided revisions)")
-          (recur more entries (conj rows {:kind :other :line line}))
+          (recur more entries (conj rows other))
 
           current
-          (recur more entries (conj rows {:kind :text :entry current :line line}))
+          (recur more entries (conj rows {:row/kind :text :row/entry current :row/line line}))
 
           :else
-          (recur more entries (conj rows {:kind :other :line line})))))))
+          (recur more entries (conj rows other)))))))
 
 (defn selectable? [row]
-  (contains? #{:node :file} (:kind row)))
+  (contains? #{:node :file} (:row/kind row)))

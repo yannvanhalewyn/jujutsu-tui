@@ -1,11 +1,76 @@
 (ns jjtui.effects
   "Turns the effect maps returned by jjtui.app into charm commands. This is
-   the only place the running program does I/O."
+   the only place the running program does I/O.
+
+   Effects dispatch on :fx/type. Their results come back as messages whose
+   charm :type is a :msg/ keyword, which keeps them apart from charm's own
+   messages (:key-press, :window-size …)."
   (:require
    [babashka.process :as p]
    [charm.program :as program]
    [clojure.string :as str]
-   [jjtui.jj :as jj]))
+   [jjtui.jj :as jj]
+   [jjtui.log :as log]
+   [jjtui.state :as st]))
+
+;; ---------------------------------------------------------------------------
+;; Schemas (malli, plain data: validated in the tests, not at runtime)
+
+(def JjEffect
+  "Runs jj in the background. Its result message carries the effect back."
+  [:map
+   [:fx/type [:= :jj]]
+   [:fx/args [:vector :string]]
+   [:fx/success {:doc "Message on success, else jj's output"} [:maybe :string]]
+   [:fx/clear-marks? [:maybe :boolean]]])
+
+(def BookmarkPurpose [:enum :branch-diff :bookmark-set])
+
+(def Msg
+  "The messages effects send back to jjtui.app/update-state."
+  [:multi {:dispatch :type}
+   [:msg/log-loaded [:map
+                     [:type [:= :msg/log-loaded]]
+                     [:msg/gen :int]
+                     [:msg/result [:or log/Log jj/Failure]]]]
+   [:msg/jj-done [:map
+                  [:type [:= :msg/jj-done]]
+                  [:msg/effect JjEffect]
+                  [:msg/result jj/Result]]]
+   [:msg/bookmarks-loaded [:map
+                           [:type [:= :msg/bookmarks-loaded]]
+                           [:msg/purpose BookmarkPurpose]
+                           [:msg/result jj/Bookmarks]]]
+   [:msg/diff-resolved [:map
+                        [:type [:= :msg/diff-resolved]]
+                        [:msg/result [:or st/DiffTarget jj/Failure]]]]
+   [:msg/preview-fetch [:map
+                        [:type [:= :msg/preview-fetch]]
+                        [:msg/key st/PreviewKey]]]
+   [:msg/preview-loaded [:map
+                         [:type [:= :msg/preview-loaded]]
+                         [:msg/key st/PreviewKey]
+                         [:msg/lines [:vector :string]]]]])
+
+(def Effect
+  [:multi {:dispatch :fx/type}
+   [:quit [:map [:fx/type [:= :quit]]]]
+   [:load-log [:map
+               [:fx/type [:= :load-log]]
+               [:fx/gen :int]
+               [:fx/params {:doc "Options of jjtui.jj/load-log"}
+                [:map
+                 [:revset [:maybe :string]]
+                 [:base-template :string]
+                 [:files [:or [:= :all] :string :nil]]]]]]
+   [:jj JjEffect]
+   [:bookmarks [:map [:fx/type [:= :bookmarks]] [:fx/purpose BookmarkPurpose]]]
+   [:resolve-diff [:map [:fx/type [:= :resolve-diff]] [:fx/target st/DiffTarget]]]
+   [:debounce [:map [:fx/type [:= :debounce]] [:fx/ms :int] [:fx/msg Msg]]]
+   [:preview [:map [:fx/type [:= :preview]] [:fx/key st/PreviewKey]]]])
+
+;; ---------------------------------------------------------------------------
+;; Running effects
 
 (def ^:private max-preview-lines 20000)
 
@@ -27,50 +92,53 @@
       [(str "Preview command failed: " (ex-message e))])))
 
 (defn- resolve-diff
-  "Fills :from-sha and :to-sha of a diff target from its :from-rev/:to-rev."
-  [dir {:keys [from-rev to-rev from-is-commit?] :as target}]
+  "Fills :target/from-sha and :target/to-sha of a diff target from its
+   :target/from-rev and :target/to-rev. Returns the target or a jj/Failure."
+  [dir {:target/keys [from-rev to-rev from-commit?] :as target}]
   (let [to (jj/commit-ids dir to-rev)
-        from (if from-is-commit?
+        from (if from-commit?
                (let [r (jj/commit-ids dir from-rev)]
-                 (if (:error r) r {:id (first (:ids r))}))
+                 (if (:jj/error r) r {:jj/id (first (:jj/ids r))}))
                (jj/first-parent dir from-rev))]
     (cond
-      (:error to) {:error (:error to)}
-      (not= 1 (count (:ids to))) {:error (str "The selection has " (count (:ids to)) " heads; the diff tool needs exactly one")}
-      (:error from) {:error (:error from)}
-      (str/blank? (:id from)) {:error "The selection starts at the root commit, which has no parent"}
-      :else {:target (assoc target :from-sha (:id from) :to-sha (first (:ids to)))})))
+      (:jj/error to) to
+      (not= 1 (count (:jj/ids to))) {:jj/error (str "The selection has " (count (:jj/ids to)) " heads; the diff tool needs exactly one")}
+      (:jj/error from) from
+      (str/blank? (:jj/id from)) {:jj/error "The selection starts at the root commit, which has no parent"}
+      :else (assoc target :target/from-sha (:jj/id from) :target/to-sha (first (:jj/ids to))))))
 
-(defn- effect->cmd [state {:keys [fx] :as effect}]
+(defn- effect->cmd [state effect]
   (let [dir (:app/dir state)]
-    (case fx
+    (case (:fx/type effect)
       :quit program/quit-cmd
 
       :load-log
-      (program/cmd #(hash-map :type :log-loaded
-                              :gen (:gen effect)
-                              :result (jj/load-log dir (:params effect))))
+      (program/cmd #(hash-map :type :msg/log-loaded
+                              :msg/gen (:fx/gen effect)
+                              :msg/result (jj/load-log dir (:fx/params effect))))
 
       :jj
-      (program/cmd #(hash-map :type :jj-done
-                              :fx effect
-                              :result (jj/run dir (:args effect))))
+      (program/cmd #(hash-map :type :msg/jj-done
+                              :msg/effect effect
+                              :msg/result (jj/run dir (:fx/args effect))))
 
       :bookmarks
-      (program/cmd #(hash-map :type :bookmarks-loaded
-                              :purpose (:purpose effect)
-                              :result (jj/bookmarks dir)))
+      (program/cmd #(hash-map :type :msg/bookmarks-loaded
+                              :msg/purpose (:fx/purpose effect)
+                              :msg/result (jj/bookmarks dir)))
 
       :resolve-diff
-      (program/cmd #(merge {:type :diff-resolved} (resolve-diff dir (:target effect))))
+      (program/cmd #(hash-map :type :msg/diff-resolved
+                              :msg/result (resolve-diff dir (:fx/target effect))))
 
       :debounce
-      (program/cmd (fn [] (Thread/sleep (long (:ms effect))) (:msg effect)))
+      (program/cmd (fn [] (Thread/sleep (long (:fx/ms effect))) (:fx/msg effect)))
 
       :preview
-      (program/cmd #(hash-map :type :preview-loaded
-                              :key (:key effect)
-                              :lines (run-preview dir (:argv effect) (:width effect)))))))
+      (program/cmd #(let [[argv width :as k] (:fx/key effect)]
+                      {:type :msg/preview-loaded
+                       :msg/key k
+                       :msg/lines (run-preview dir argv width)})))))
 
 (defn ->cmd
   "One charm command for a list of effects. Quitting wins over everything
@@ -78,6 +146,6 @@
   [state effects]
   (cond
     (empty? effects) nil
-    (some #(= :quit (:fx %)) effects) program/quit-cmd
+    (some #(= :quit (:fx/type %)) effects) program/quit-cmd
     (= 1 (count effects)) (effect->cmd state (first effects))
     :else (apply program/batch (map #(effect->cmd state %) effects))))

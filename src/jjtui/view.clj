@@ -58,7 +58,7 @@
     (:app/width state)))
 
 (defn- message-lines [state]
-  (let [lines (str/split-lines (str (get-in state [:app/message :text])))]
+  (let [lines (str/split-lines (str (get-in state [:app/message :message/text])))]
     (when (> (count lines) 1) lines)))
 
 (defn- separator [state title]
@@ -72,43 +72,43 @@
 (defn panel-lines
   "Lines of the bottom panel (menus, pickers, prompts, multi-line errors)."
   [state]
-  (let [{:keys [type] :as mode} (:app/mode state)]
+  (let [{:mode/keys [type title input] :as mode} (:app/mode state)]
     (case type
       :picker
       (let [matches (st/picker-matches mode)
             n (picker-max-items state)
-            sel (max 0 (min (:selected mode) (dec (count matches))))
+            sel (max 0 (min (:mode/selected mode) (dec (count matches))))
             start (max 0 (min (- sel (quot n 2)) (- (count matches) n)))
             shown (take n (drop start (map-indexed vector matches)))]
         (concat
-         [(separator state (:title mode))
-          (str (ti/text-input-view (:input mode)) "  " (dim (str (count matches) "/" (count (:items mode)))))]
+         [(separator state title)
+          (str (ti/text-input-view input) "  " (dim (str (count matches) "/" (count (:mode/items mode)))))]
          (if (empty? shown)
            [(dim "  no matches")]
            (for [[i item] shown]
              (if (= i sel)
-               (with-bg (str (fg 5 "❯ ") (bold (:label item))) (:selected (palette state)) (:app/width state))
-               (str "  " (:label item)))))))
+               (with-bg (str (fg 5 "❯ ") (bold (:item/label item))) (:selected (palette state)) (:app/width state))
+               (str "  " (:item/label item)))))))
 
       :menu
       (concat
-       [(separator state (:title mode))]
-       (for [{:keys [key label toggle]} (:options mode)]
+       [(separator state title)]
+       (for [{:option/keys [key label toggle]} (:mode/options mode)]
          (str "  " (bold (fg 3 key)) "  "
               (if toggle
-                (str (if (contains? (:flags mode) toggle) (fg 2 "[x] ") (dim "[ ] ")) label)
+                (str (if (contains? (:mode/flags mode) toggle) (fg 2 "[x] ") (dim "[ ] ")) label)
                 label)))
        [(dim "  esc cancel")])
 
       :confirm
       (concat
        [(separator state "Confirm")]
-       (map #(str "  " %) (:prompt mode))
+       (map #(str "  " %) (:mode/prompt mode))
        [(str "  " (bold (fg 2 "y")) "/enter confirm   " (bold (fg 1 "n")) "/esc cancel")])
 
       :input
-      [(separator state (:title mode))
-       (str "  " (ti/text-input-view (:input mode)))]
+      [(separator state title)
+       (str "  " (ti/text-input-view input))]
 
       (when-let [lines (message-lines state)]
         (cons (separator state "Message")
@@ -120,36 +120,36 @@
 (def ^:private status-colors
   {"M" 3 "A" 2 "D" 1 "R" 6 "C" 6})
 
-(defn- file-line [{:keys [prefix file]}]
-  (str prefix
-       (fg (get status-colors (:status file) 7) (:status file)) " "
-       (:path file)
-       (when (:source file) (dim (str " ← " (:source file))))))
+(defn- file-line [{:row/keys [prefix file]}]
+  (let [{:file/keys [status path source]} file]
+    (str prefix
+         (fg (get status-colors status 7) status) " "
+         path
+         (when source (dim (str " ← " source))))))
 
 (defn- block-of
   "Row indices belonging to the change at row index `idx` (its node, text and
    file lines)."
   [rows idx]
-  (let [entry (:entry (get rows idx))]
+  (let [entry (:row/entry (get rows idx))]
     (set (when entry
-           (keep-indexed (fn [i r] (when (and (= entry (:entry r)) (not= :other (:kind r))) i)) rows)))))
+           (keep-indexed (fn [i r] (when (and (= entry (:row/entry r)) (not= :other (:row/kind r))) i)) rows)))))
 
 (defn- log-lines [state cursor-idx height width]
   (let [rows (st/rows state)
-        entries (st/entries state)
+        mode (:app/mode state)
         pal (palette state)
         block (if cursor-idx (block-of rows cursor-idx) #{})
         marks (:app/marks state)
-        sources (set (when (= :pick (get-in state [:app/mode :type])) (get-in state [:app/mode :sources])))
+        sources (set (when (= :pick (:mode/type mode)) (:mode/sources mode)))
         visible (take height (drop (:app/offset state) (map-indexed vector rows)))]
     (cond
       (and (empty? rows) (:app/loading? state)) [(dim "  Loading…")]
       (empty? rows) [(dim "  No changes in this revset (press L to change it)")]
       :else
       (for [[i row] visible]
-        (let [entry (get entries (:entry row))
-              id (:change-id entry)
-              node? (= :node (:kind row))
+        (let [id (:change/id (st/row-entry state row))
+              node? (= :node (:row/kind row))
               cursor? (= i cursor-idx)
               in-block? (contains? block i)
               gutter (str (cond cursor? (fg 6 "▌") in-block? (fg 6 "▏") :else " ")
@@ -157,7 +157,7 @@
                             (and node? (contains? sources id)) (fg 3 "◆")
                             (and node? (contains? marks id)) (fg 5 "●")
                             :else " "))
-              content (if (= :file (:kind row)) (file-line row) (:line row))
+              content (if (= :file (:row/kind row)) (file-line row) (:row/line row))
               line (str gutter content)]
           (cond
             cursor? (with-bg line (:cursor pal) width)
@@ -168,10 +168,10 @@
 ;; Diff pane
 
 (defn- preview-lines [state height width]
-  (let [{:keys [lines offset loading?]} (:app/preview state)
+  (let [{:preview/keys [lines offset loading?]} (:app/preview state)
         entry (st/cursor-entry state)
-        title (str " " (if entry (str "diff " (:short-id entry)) "diff")
-                   (when-let [f (get-in state [:app/cursor :file])] (str "  " f))
+        title (str " " (if entry (str "diff " (:change/short-id entry)) "diff")
+                   (when-let [f (get-in state [:app/cursor :file/path])] (str "  " f))
                    (when loading? "  …")
                    (when (seq lines)
                      (str "  " (inc (or offset 0)) "/" (count lines))))
@@ -185,10 +185,10 @@
 
 (defn- status-line [state]
   (let [pal (palette state)
-        mode (:app/mode state)
-        badge (case (:type mode)
-                :pick (if (= :rebase (:action mode))
-                        (str " REBASE " (:source-flag mode) " ")
+        {:mode/keys [type action] :as mode} (:app/mode state)
+        badge (case type
+                :pick (if (= :rebase action)
+                        (str " REBASE " (:mode/source-flag mode) " ")
                         " SQUASH INTO ")
                 :picker " PICK "
                 :menu " MENU "
@@ -196,17 +196,17 @@
                 :input " INPUT "
                 :help " HELP "
                 " jjtui ")
-        badge (paint badge 1 "38;5;15" (str "48;5;" (if (= :pick (:type mode)) 3 (:badge pal))))
-        msg (:app/message state)
+        badge (paint badge 1 "38;5;15" (str "48;5;" (if (= :pick type) 3 (:badge pal))))
+        {:message/keys [text level] :as msg} (:app/message state)
         left (cond
                (:app/busy state) (fg 3 (str "⟳ " (:app/busy state) "…"))
-               (= :pick (:type mode))
-               (str "Pick target for " (count (:sources mode)) " change(s): "
-                    (dim (get keys/pick-help (:action mode))))
-               (= :picker (:type mode)) (dim "type to filter · ↑/↓ move · enter select · esc cancel")
-               (= :input (:type mode)) (dim "enter submit · esc cancel")
+               (= :pick type)
+               (str "Pick target for " (count (:mode/sources mode)) " change(s): "
+                    (dim (get keys/pick-help action)))
+               (= :picker type) (dim "type to filter · ↑/↓ move · enter select · esc cancel")
+               (= :input type) (dim "enter submit · esc cancel")
                (message-lines state) (dim "(see message above)")
-               msg (if (= :error (:level msg)) (fg 1 (:text msg)) (:text msg))
+               msg (if (= :error level) (fg 1 text) text)
                (:app/loading? state) (dim "loading…")
                :else (dim "? help"))
         right (str/join "  "
@@ -255,7 +255,7 @@
 (defn- help-screen [state height]
   (let [lines (concat [(str (bold " jjtui") (dim "  keys  ·  esc/q/? close  ·  j/k scroll")) ""]
                       (map #(str " " %) (help-columns state)))
-        offset (max 0 (min (get-in state [:app/mode :offset] 0) (- (count lines) height)))]
+        offset (max 0 (min (get-in state [:app/mode :mode/offset] 0) (- (count lines) height)))]
     (map #(fit % (:app/width state)) (take height (drop offset lines)))))
 
 ;; ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@
         body-h (max 1 (- height 1 (count panel)))
         lw (log-width state)
         cursor-idx (st/cursor-index state)
-        body (if (= :help (get-in state [:app/mode :type]))
+        body (if (= :help (get-in state [:app/mode :mode/type]))
                (help-screen state body-h)
                (let [left (log-lines state cursor-idx body-h lw)]
                  (if (:app/split? state)

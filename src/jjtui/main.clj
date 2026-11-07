@@ -43,7 +43,7 @@ Press ? inside the TUI for keybindings.")
 
 (defn- run-interactive
   "Runs a command on the real terminal while the TUI is stopped."
-  [dir {:keys [argv wait?]}]
+  [dir {:exec/keys [argv wait?]}]
   (println (str "\u001b[2m$ " (str/join " " argv) "\u001b[0m"))
   (let [exit (try
                (:exit @(p/process argv {:dir dir :inherit true}))

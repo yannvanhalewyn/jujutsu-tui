@@ -24,7 +24,7 @@
    :app/base-template base-template
    :app/revset (or revset (:revset config))
    :app/good-revset (or revset (:revset config))
-   :app/log {:entries [] :rows []}
+   :app/log {:log/entries [] :log/rows []}
    :app/log-gen 0
    :app/loading? true
    :app/cursor nil
@@ -40,7 +40,7 @@
    :app/ignore-immutable? false
    :app/diff-tool (:diff-tool config)
    :app/mode nil
-   :app/message (when config-error {:text config-error :level :error})
+   :app/message (when config-error {:message/text config-error :message/level :error})
    :app/busy nil
    :app/width 80
    :app/height 24
@@ -48,10 +48,13 @@
    :app/exec nil})
 
 (defn- message [state text level]
-  (assoc state :app/message {:text text :level level}))
+  (assoc state :app/message {:message/text text :message/level level}))
 
 (defn- info [state text] (message state text :info))
 (defn- error [state text] (message state text :error))
+
+(defn- change-cursor [entry]
+  {:change/id (:change/id entry) :file/path nil})
 
 (defn- set-cursor-index [state i]
   (if-let [row (get (rows state) i)]
@@ -85,10 +88,10 @@
 (defn- block-end
   "Last row index of the change that row `i` belongs to."
   [rs i]
-  (let [entry (:entry (get rs i))]
+  (let [entry (:row/entry (get rs i))]
     (loop [j i]
       (let [next-row (get rs (inc j))]
-        (if (and next-row (= entry (:entry next-row)) (not= :node (:kind next-row)))
+        (if (and next-row (= entry (:row/entry next-row)) (not= :node (:row/kind next-row)))
           (recur (inc j))
           j)))))
 
@@ -113,7 +116,7 @@
 (defn marked-entries
   "Marked changes in log order (newest first)."
   [state]
-  (filter #(contains? (:app/marks state) (:change-id %)) (entries state)))
+  (filter #(contains? (:app/marks state) (:change/id %)) (entries state)))
 
 (defn- targets
   "The changes an action applies to: the marks, else the cursor's change."
@@ -123,10 +126,13 @@
       (vec marked)
       (if-let [e (cursor-entry state)] [e] []))))
 
-(defn- ids [es] (mapv :change-id es))
+(defn- ids [es] (mapv :change/id es))
 
 (defn- describe-entries [es]
-  (str/join ", " (map :short-id es)))
+  (str/join ", " (map :change/short-id es)))
+
+(defn- described? [entry]
+  (not (str/blank? (:change/description entry))))
 
 (defn- ignore-immutable [state args]
   (cond-> args (:app/ignore-immutable? state) (conj "--ignore-immutable")))
@@ -147,7 +153,7 @@
   [state]
   (let [gen (inc (:app/log-gen state))]
     [(assoc state :app/log-gen gen :app/loading? true)
-     [{:fx :load-log :gen gen :params (log-params state)}]]))
+     [{:fx/type :load-log :fx/gen gen :fx/params (log-params state)}]]))
 
 (defn- run-jj
   "Runs a non-interactive jj command in the background, reloading after."
@@ -155,14 +161,14 @@
   (if (:app/busy state)
     [(error state (str "Busy: " (:app/busy state))) []]
     [(assoc state :app/busy (or label (str "jj " (first args))))
-     [{:fx :jj :args args :success success :clear-marks? clear-marks?}]]))
+     [{:fx/type :jj :fx/args args :fx/success success :fx/clear-marks? clear-marks?}]]))
 
 (defn- run-exec
   "Suspends the TUI to run `argv` in the terminal."
   [state argv & {:keys [wait? reload? clear-marks?] :or {reload? true}}]
-  [(cond-> (assoc state :app/exec {:argv argv :wait? wait? :reload? reload?})
+  [(cond-> (assoc state :app/exec {:exec/argv argv :exec/wait? wait? :exec/reload? reload?})
      clear-marks? (assoc :app/marks #{}))
-   [{:fx :quit}]])
+   [{:fx/type :quit}]])
 
 ;; ---------------------------------------------------------------------------
 ;; Diffs
@@ -170,45 +176,45 @@
 (defn- tool-spec [state]
   (config/tool-spec (get-in state [:app/config :diff-tools (:app/diff-tool state)])))
 
+(defn- change-target
+  "The diff of one change, optionally limited to some files."
+  [entry files]
+  {:target/revset (:change/commit-id entry)
+   :target/files files
+   :target/from-sha (or (first (:change/parents entry)) "")
+   :target/to-sha (:change/commit-id entry)})
+
 (defn- diff-target
   "What the diff applies to: a file of the cursor change, the marks, or the
-   cursor change. Returns {:revset :files :from-rev :to-rev :from-sha :to-sha}
-   with the shas filled in when they're known without asking jj."
+   cursor change. The shas are filled in when they're known without asking jj."
   [state]
   (let [row (cursor-row state)
         entry (cursor-entry state)
         marked (marked-entries state)]
     (cond
-      (and (seq marked) (not= :file (:kind row)))
-      (let [revset (str/join " | " (map :commit-id marked))]
-        {:revset revset
-         :files []
-         :from-rev (str "roots(" revset ")")
-         :to-rev (str "heads(" revset ")")
-         :title (str (count marked) " marked changes")})
+      (and (seq marked) (not= :file (:row/kind row)))
+      (let [revset (str/join " | " (map :change/commit-id marked))]
+        {:target/revset revset
+         :target/files []
+         :target/from-rev (str "roots(" revset ")")
+         :target/to-rev (str "heads(" revset ")")})
 
       entry
-      (let [file (:file row)]
-        {:revset (:commit-id entry)
-         :files (if file (vec (distinct (remove nil? [(:source file) (:path file)]))) [])
-         :from-sha (or (first (:parents entry)) "")
-         :to-sha (:commit-id entry)
-         :title (str (:short-id entry) (when file (str " " (:path file))))}))))
+      (let [{:file/keys [source path] :as file} (:row/file row)]
+        (change-target entry (if file (vec (distinct (remove nil? [source path]))) []))))))
 
 (defn- branch-target [bookmark-ref]
-  (let [revset (str "fork_point(trunk() | " bookmark-ref ").." bookmark-ref)]
-    {:revset revset
-     :files []
-     :from-rev (str "fork_point(trunk() | " bookmark-ref ")")
-     :from-is-commit? true
-     :to-rev bookmark-ref
-     :title bookmark-ref}))
+  {:target/revset (str "fork_point(trunk() | " bookmark-ref ").." bookmark-ref)
+   :target/files []
+   :target/from-rev (str "fork_point(trunk() | " bookmark-ref ")")
+   :target/from-commit? true
+   :target/to-rev bookmark-ref})
 
 (defn diff-vars [state target]
-  {"revset" (:revset target)
-   "files" (:files target)
-   "from-sha" (:from-sha target)
-   "to-sha" (:to-sha target)
+  {"revset" (:target/revset target)
+   "files" (:target/files target)
+   "from-sha" (:target/from-sha target)
+   "to-sha" (:target/to-sha target)
    "width" (str (:app/width state))
    "repo" (:app/dir state)})
 
@@ -222,10 +228,10 @@
       (nil? cmd)
       [(error state (str "No diff tool named " (:app/diff-tool state))) []]
 
-      (and needs-shas? (nil? (:to-sha target)))
-      [(info state "Resolving commits…") [{:fx :resolve-diff :target target}]]
+      (and needs-shas? (nil? (:target/to-sha target)))
+      [(info state "Resolving commits…") [{:fx/type :resolve-diff :fx/target target}]]
 
-      (and needs-shas? (str/blank? (:from-sha target)))
+      (and needs-shas? (str/blank? (:target/from-sha target)))
       [(error state "The root commit has no parent to diff against") []]
 
       :else
@@ -238,46 +244,48 @@
 (defn preview-width [state]
   (- (:app/width state) (view/log-width state) 1))
 
-(defn- preview-request
-  "The preview the cursor wants: {:key :argv}, or nil."
+(defn- preview-key
+  "[argv width] of the preview the cursor wants, or nil."
   [state]
   (when-let [target (and (:app/split? state) (cursor-entry state) (diff-target state))]
     (let [cmd (get-in state [:app/config :preview-command])
           width (preview-width state)
           target (if (seq (marked-entries state))
                    ;; The pane follows the cursor, not the marks
-                   (let [entry (cursor-entry state)]
-                     {:revset (:commit-id entry) :files []
-                      :from-sha (or (first (:parents entry)) "") :to-sha (:commit-id entry)})
-                   target)
-          argv (config/render-command cmd (assoc (diff-vars state target) "width" (str width)))]
-      {:key [argv width] :argv argv :width width})))
+                   (change-target (cursor-entry state) [])
+                   target)]
+      [(config/render-command cmd (assoc (diff-vars state target) "width" (str width))) width])))
 
 (defn- sync-preview
   "Points the preview at the cursor: from the cache when possible, otherwise
    after a short debounce so holding j doesn't run jj for every row."
   [[state fx]]
-  (let [{:keys [key] :as req} (preview-request state)
-        current (get-in state [:app/preview :key])]
+  (let [k (preview-key state)
+        current (get-in state [:app/preview :preview/key])]
     (cond
-      (or (nil? req) (= key current)) [state fx]
+      (or (nil? k) (= k current)) [state fx]
 
-      (contains? (:app/preview-cache state) key)
-      [(assoc state :app/preview {:key key :lines (get-in state [:app/preview-cache key]) :offset 0}) fx]
+      (contains? (:app/preview-cache state) k)
+      [(assoc state :app/preview {:preview/key k
+                                  :preview/lines (get-in state [:app/preview-cache k])
+                                  :preview/offset 0})
+       fx]
 
       :else
-      [(assoc state :app/preview {:key key
-                                  :lines (get-in state [:app/preview :lines])
-                                  :offset 0
-                                  :loading? true})
-       (conj (vec fx) {:fx :debounce :ms 60 :msg {:type :preview-fetch :key key}})])))
+      [(assoc state :app/preview {:preview/key k
+                                  :preview/lines (get-in state [:app/preview :preview/lines])
+                                  :preview/offset 0
+                                  :preview/loading? true})
+       (conj (vec fx) {:fx/type :debounce
+                       :fx/ms 60
+                       :fx/msg {:type :msg/preview-fetch :msg/key k}})])))
 
 (defn- scroll-preview [state delta]
   (if-not (and (:app/split? state) (:app/preview state))
     state
-    (let [n (count (get-in state [:app/preview :lines]))
+    (let [n (count (get-in state [:app/preview :preview/lines]))
           h (log-height state)]
-      (update-in state [:app/preview :offset]
+      (update-in state [:app/preview :preview/offset]
                  #(max 0 (min (+ (or % 0) delta) (- n h)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -287,25 +295,40 @@
   (ti/text-input :prompt prompt :value (or value "")))
 
 (defn- open-picker [state purpose title items & {:as extra}]
-  (assoc state :app/mode (merge {:type :picker
-                                 :purpose purpose
-                                 :title title
-                                 :items items
-                                 :selected 0
-                                 :input (input "" "› ")}
+  (assoc state :app/mode (merge {:mode/type :picker
+                                 :mode/purpose purpose
+                                 :mode/title title
+                                 :mode/items items
+                                 :mode/selected 0
+                                 :mode/input (input "" "› ")}
                                 extra)))
 
 (defn- open-menu [state purpose title options & {:as extra}]
-  (assoc state :app/mode (merge {:type :menu :purpose purpose :title title :options options :flags #{}}
+  (assoc state :app/mode (merge {:mode/type :menu
+                                 :mode/purpose purpose
+                                 :mode/title title
+                                 :mode/options options
+                                 :mode/flags #{}}
+                                extra)))
+
+(defn- open-input [state purpose title value prompt & {:as extra}]
+  (assoc state :app/mode (merge {:mode/type :input
+                                 :mode/purpose purpose
+                                 :mode/title title
+                                 :mode/input (input value prompt)}
                                 extra)))
 
 (defn- confirm [state prompt on-yes]
-  (assoc state :app/mode {:type :confirm :prompt prompt :on-yes on-yes}))
+  (assoc state :app/mode {:mode/type :confirm :mode/prompt prompt :mode/on-yes on-yes}))
 
 (defn- start-pick [state action sources]
   (if (empty? sources)
     [(error state "No change at cursor") []]
-    [(assoc state :app/mode {:type :pick :action action :sources (ids sources) :source-flag "-r"}) []]))
+    [(assoc state :app/mode {:mode/type :pick
+                             :mode/action action
+                             :mode/sources (ids sources)
+                             :mode/source-flag "-r"})
+     []]))
 
 ;; ---------------------------------------------------------------------------
 ;; Actions
@@ -314,8 +337,7 @@
   "jj squash opens an editor only when it has to combine two descriptions.
    An unknown parent counts as described, which errs toward the terminal."
   [sources target-entry]
-  (let [described? #(not (str/blank? (:description %)))
-        target-described? (if target-entry (described? target-entry) true)]
+  (let [target-described? (if target-entry (described? target-entry) true)]
     (> (+ (count (filter described? sources)) (if target-described? 1 0)) 1)))
 
 (defn- squash [state sources target-entry args]
@@ -325,37 +347,37 @@
       (run-jj state args {:label "Squashing" :clear-marks? true}))))
 
 (defn- entry-by-commit [state commit-id]
-  (first (filter #(= commit-id (:commit-id %)) (entries state))))
+  (first (filter #(= commit-id (:change/commit-id %)) (entries state))))
 
 (defn- entry-by-change [state change-id]
-  (first (filter #(= change-id (:change-id %)) (entries state))))
+  (first (filter #(= change-id (:change/id %)) (entries state))))
 
 (defn- rebase [state dest-flag]
-  (let [{:keys [sources source-flag]} (:app/mode state)
+  (let [{:mode/keys [sources source-flag]} (:app/mode state)
         target (cursor-entry state)]
     (cond
       (nil? target) [(error state "No change at cursor") []]
-      (some #{(:change-id target)} sources) [(error state "Can't rebase a change onto itself") []]
+      (some #{(:change/id target)} sources) [(error state "Can't rebase a change onto itself") []]
       :else
       (run-jj (assoc state :app/mode nil)
               (ignore-immutable state (-> ["rebase"]
                                           (into (mapcat (fn [id] [source-flag id]) sources))
-                                          (into [dest-flag (:change-id target)])))
+                                          (into [dest-flag (:change/id target)])))
               {:label "Rebasing" :clear-marks? true}))))
 
 (defn- finish-pick [state dest-flag]
-  (let [{:keys [action sources]} (:app/mode state)
+  (let [{:mode/keys [action sources]} (:app/mode state)
         target (cursor-entry state)]
     (case action
       :rebase (rebase state dest-flag)
       :squash-into
       (cond
         (nil? target) [(error state "No change at cursor") []]
-        (some #{(:change-id target)} sources) [(error state "Can't squash a change into itself") []]
+        (some #{(:change/id target)} sources) [(error state "Can't squash a change into itself") []]
         :else (squash (assoc state :app/mode nil)
                       (keep #(entry-by-change state %) sources)
                       target
-                      ["squash" "--from" (str/join " | " sources) "--into" (:change-id target)])))))
+                      ["squash" "--from" (str/join " | " sources) "--into" (:change/id target)])))))
 
 (defn- with-entry [state f]
   (if-let [entry (cursor-entry state)]
@@ -365,15 +387,15 @@
 (defn- clear-cursor-file
   "Moves the cursor from a file row to its change."
   [state]
-  (update state :app/cursor #(some-> % (assoc :file nil))))
+  (update state :app/cursor #(some-> % (assoc :file/path nil))))
 
 (defn- toggle-files [state]
   (if-let [entry (cursor-entry state)]
-    (let [id (:change-id entry)
+    (let [id (:change/id entry)
           state (if (:app/show-files? state)
                   ;; Collapsing one change out of "all": expand all the others
                   (assoc state :app/show-files? false
-                         :app/expanded (disj (set (map :change-id (entries state))) id))
+                         :app/expanded (disj (set (ids (entries state))) id))
                   (update state :app/expanded #(if (contains? % id) (disj % id) (conj % id))))]
       (reload (clear-cursor-file state)))
     [state []]))
@@ -392,12 +414,12 @@
     :cursor/half-down [(move-rows state (max 1 (quot (log-height state) 2))) []]
     :cursor/half-up [(move-rows state (- (max 1 (quot (log-height state) 2)))) []]
     :cursor/working-copy
-    (if-let [wc (first (filter :working-copy? (entries state)))]
-      [(assoc state :app/cursor {:change-id (:change-id wc) :file nil}) []]
+    (if-let [wc (first (filter :change/working-copy? (entries state)))]
+      [(assoc state :app/cursor (change-cursor wc)) []]
       [(error state "The working copy is not in this revset") []])
     :refresh (reload state)
-    :help [(assoc state :app/mode {:type :help :offset 0}) []]
-    :quit [state [{:fx :quit}]]
+    :help [(assoc state :app/mode {:mode/type :help :mode/offset 0}) []]
+    :quit [state [{:fx/type :quit}]]
 
     :files/toggle (toggle-files state)
     :files/toggle-all (reload (-> state
@@ -411,29 +433,25 @@
     :preview/page-up [(scroll-preview (ensure-split state) (- (log-height state))) []]
     :split/shrink [(update state :app/split-ratio #(max 0.2 (- % 0.05))) []]
     :split/grow [(update state :app/split-ratio #(min 0.8 (+ % 0.05))) []]
-    :revset/set [(assoc state :app/mode {:type :input
-                                         :purpose :revset
-                                         :title "Log revset (empty for default)"
-                                         :input (input (:app/revset state) "revset › ")})
-                 []]
+    :revset/set [(open-input state :revset "Log revset (empty for default)" (:app/revset state) "revset › ") []]
 
     :diff/open (if-let [target (diff-target state)]
                  (open-diff state target)
                  [(error state "No change at cursor") []])
-    :diff/branch [(info state "Loading bookmarks…") [{:fx :bookmarks :purpose :branch-diff}]]
+    :diff/branch [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :branch-diff}]]
     :diff/pick-tool
     [(open-picker state :diff-tool "Diff tool"
                   (vec (for [k (sort (keys (get-in state [:app/config :diff-tools])))]
-                         {:label (str (name k) (when (= k (:app/diff-tool state)) "  (current)"))
-                          :value k})))
+                         {:item/label (str (name k) (when (= k (:app/diff-tool state)) "  (current)"))
+                          :item/value k})))
      []]
 
     :mark/toggle
     (if-let [entry (cursor-entry state)]
-      (let [id (:change-id entry)
+      (let [id (:change/id entry)
             state (update state :app/marks #(if (contains? % id) (disj % id) (conj % id)))]
         ;; Step to the next change, skipping its files
-        [(if-let [next-node (first (filter #(= :node (:kind (get (rows state) %)))
+        [(if-let [next-node (first (filter #(= :node (:row/kind (get (rows state) %)))
                                            (range (inc (or (cursor-index state) 0)) (count (rows state)))))]
            (set-cursor-index state next-node)
            state)
@@ -443,7 +461,7 @@
                    (seq (:app/marks state)) (info "Cleared marks"))
                  []]
 
-    :describe (with-entry state #(run-exec state (ignore-immutable state ["jj" "describe" "-r" (:change-id %)])))
+    :describe (with-entry state #(run-exec state (ignore-immutable state ["jj" "describe" "-r" (:change/id %)])))
     :new (let [ts (targets state)]
            (if (empty? ts)
              [(error state "No change at cursor") []]
@@ -454,34 +472,36 @@
                                  (str "Created new change on " (describe-entries ts)))})))
     :new-menu (with-entry state
                 (fn [entry]
-                  [(open-menu state :new (str "New change relative to " (:short-id entry))
-                              [{:key "a" :label "insert after (-A)"}
-                               {:key "b" :label "insert before (-B)"}
-                               {:key "e" :label "--no-edit" :toggle :no-edit}]
-                              :entry entry)
+                  [(open-menu state :new (str "New change relative to " (:change/short-id entry))
+                              [{:option/key "a" :option/label "insert after (-A)"}
+                               {:option/key "b" :option/label "insert before (-B)"}
+                               {:option/key "e" :option/label "--no-edit" :option/toggle :no-edit}]
+                              :mode/entry entry)
                    []]))
-    :edit (with-entry state #(run-jj state (ignore-immutable state ["edit" (:change-id %)])
-                                     {:label "Editing" :success (str "Editing " (:short-id %))}))
+    :edit (with-entry state #(run-jj state (ignore-immutable state ["edit" (:change/id %)])
+                                     {:label "Editing" :success (str "Editing " (:change/short-id %))}))
     :abandon (let [ts (targets state)]
                (if (empty? ts)
                  [(error state "No change at cursor") []]
                  [(confirm state
                            (into [(str "Abandon " (count ts) " change" (when (> (count ts) 1) "s") "?")]
-                                 (map #(str "  " (:short-id %) "  " (if (str/blank? (:description %)) "(no description)" (:description %))) ts))
+                                 (map #(str "  " (:change/short-id %) "  "
+                                            (if (described? %) (:change/description %) "(no description)"))
+                                      ts))
                            [:abandon (ids ts)])
                   []]))
-    :absorb (with-entry state #(run-jj state ["absorb" "--from" (:change-id %)] {:label "Absorbing"}))
+    :absorb (with-entry state #(run-jj state ["absorb" "--from" (:change/id %)] {:label "Absorbing"}))
     :squash (with-entry state
               (fn [entry]
-                (let [marked (remove #(= (:change-id entry) (:change-id %)) (marked-entries state))]
+                (let [marked (remove #(= (:change/id entry) (:change/id %)) (marked-entries state))]
                   (if (seq marked)
                     (squash state marked entry
-                            ["squash" "--from" (str/join " | " (ids marked)) "--into" (:change-id entry)])
-                    (squash state [entry] (entry-by-commit state (first (:parents entry)))
-                            ["squash" "-r" (:change-id entry)])))))
+                            ["squash" "--from" (str/join " | " (ids marked)) "--into" (:change/id entry)])
+                    (squash state [entry] (entry-by-commit state (first (:change/parents entry)))
+                            ["squash" "-r" (:change/id entry)])))))
     :squash-into (start-pick state :squash-into (targets state))
     :rebase (start-pick state :rebase (targets state))
-    :split-change (with-entry state #(run-exec state (ignore-immutable state ["jj" "split" "-r" (:change-id %)])))
+    :split-change (with-entry state #(run-exec state (ignore-immutable state ["jj" "split" "-r" (:change/id %)])))
     :undo (run-jj state ["undo"] {:label "Undoing"})
     :redo (run-jj state ["redo"] {:label "Redoing"})
     :toggle-ignore-immutable
@@ -489,18 +509,19 @@
       [(info state (if (:app/ignore-immutable? state) "--ignore-immutable on" "--ignore-immutable off")) []])
 
     :bookmark/set (if (cursor-entry state)
-                    [(info state "Loading bookmarks…") [{:fx :bookmarks :purpose :bookmark-set}]]
+                    [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :bookmark-set}]]
                     [(error state "No change at cursor") []])
     :bookmark/menu
     (with-entry state
       (fn [entry]
-        (if (empty? (:bookmarks entry))
-          [(error state (str "No bookmarks on " (:short-id entry))) []]
-          [(open-menu state :bookmark (str "Bookmarks on " (:short-id entry) ": " (str/join ", " (:bookmarks entry)))
-                      [{:key "d" :label "delete"}
-                       {:key "r" :label "rename"}]
-                      :entry entry)
-           []])))
+        (let [bms (:change/bookmarks entry)]
+          (if (empty? bms)
+            [(error state (str "No bookmarks on " (:change/short-id entry))) []]
+            [(open-menu state :bookmark (str "Bookmarks on " (:change/short-id entry) ": " (str/join ", " bms))
+                        [{:option/key "d" :option/label "delete"}
+                         {:option/key "r" :option/label "rename"}]
+                        :mode/entry entry)
+             []]))))
     :push (let [ts (targets state)]
             (run-jj state (into ["git" "push"] (mapcat (fn [id] ["-r" id]) (ids ts))) {:label "Pushing"}))
     :push-new (let [ts (targets state)]
@@ -514,46 +535,44 @@
   [state op bookmark]
   (case op
     :delete [(confirm state [(str "Delete bookmark " bookmark "?")] [:bookmark-delete bookmark]) []]
-    :rename [(assoc state :app/mode {:type :input
-                                     :purpose :rename
-                                     :title (str "Rename bookmark " bookmark)
-                                     :bookmark bookmark
-                                     :input (input bookmark "new name › ")})
+    :rename [(open-input state :rename (str "Rename bookmark " bookmark) bookmark "new name › "
+                         :mode/bookmark bookmark)
              []]))
 
-(defn- menu-choice [state {:keys [purpose entry flags]} option]
-  (let [state (assoc state :app/mode nil)]
+(defn- menu-choice [state {:mode/keys [purpose entry flags]} option]
+  (let [state (assoc state :app/mode nil)
+        after? (= "a" (:option/key option))]
     (case purpose
       :new (run-jj state (ignore-immutable state
                                            (cond-> ["new"]
                                              (contains? flags :no-edit) (conj "--no-edit")
-                                             :always (conj (if (= "a" (:key option)) "-A" "-B") (:change-id entry))))
+                                             :always (conj (if after? "-A" "-B") (:change/id entry))))
                    {:label "Creating change"
-                    :success (str "Created new change " (if (= "a" (:key option)) "after " "before ") (:short-id entry))})
+                    :success (str "Created new change " (if after? "after " "before ") (:change/short-id entry))})
       :bookmark
-      (let [op (if (= "d" (:key option)) :delete :rename)
-            bms (:bookmarks entry)]
+      (let [op (if (= "d" (:option/key option)) :delete :rename)
+            bms (:change/bookmarks entry)]
         (if (= 1 (count bms))
           (bookmark-chosen state op (first bms))
           [(open-picker state :bookmark-op (str (name op) " bookmark")
-                        (mapv (fn [b] {:label b :value b}) bms)
-                        :op op)
+                        (mapv (fn [b] {:item/label b :item/value b}) bms)
+                        :mode/op op)
            []])))))
 
-(defn- picker-choice [state {:keys [purpose op]} item]
+(defn- picker-choice [state {:mode/keys [purpose op]} {:item/keys [value create?]}]
   (let [state (assoc state :app/mode nil)]
     (case purpose
-      :diff-tool [(info (assoc state :app/diff-tool (:value item)) (str "Diff tool: " (name (:value item)))) []]
-      :branch-diff (open-diff state (branch-target (:value item)))
-      :bookmark-op (bookmark-chosen state op (:value item))
+      :diff-tool [(info (assoc state :app/diff-tool value) (str "Diff tool: " (name value))) []]
+      :branch-diff (open-diff state (branch-target value))
+      :bookmark-op (bookmark-chosen state op value)
       :bookmark-set
       (with-entry state
         (fn [entry]
-          (if (:create? item)
-            (run-jj state ["bookmark" "create" (:value item) "-r" (:change-id entry)]
-                    {:label "Creating bookmark" :success (str "Created " (:value item) " at " (:short-id entry))})
-            (run-jj state ["bookmark" "set" (:value item) "-r" (:change-id entry) "--allow-backwards"]
-                    {:label "Moving bookmark" :success (str "Moved " (:value item) " to " (:short-id entry))})))))))
+          (if create?
+            (run-jj state ["bookmark" "create" value "-r" (:change/id entry)]
+                    {:label "Creating bookmark" :success (str "Created " value " at " (:change/short-id entry))})
+            (run-jj state ["bookmark" "set" value "-r" (:change/id entry) "--allow-backwards"]
+                    {:label "Moving bookmark" :success (str "Moved " value " to " (:change/short-id entry))})))))))
 
 (defn- confirmed [state [op arg]]
   (let [state (assoc state :app/mode nil)]
@@ -564,7 +583,7 @@
       :bookmark-delete (run-jj state ["bookmark" "delete" arg]
                                {:label "Deleting bookmark" :success (str "Deleted bookmark " arg)}))))
 
-(defn- input-submitted [state {:keys [purpose bookmark input]}]
+(defn- input-submitted [state {:mode/keys [purpose bookmark input]}]
   (let [value (str/trim (ti/value input))
         state (assoc state :app/mode nil)]
     (case purpose
@@ -584,14 +603,14 @@
 
 (defn- handle-pick-key [state k]
   (let [action (get keys/keymap k)
-        rebase? (= :rebase (get-in state [:app/mode :action]))]
+        rebase? (= :rebase (get-in state [:app/mode :mode/action]))]
     (cond
       (#{"escape" "q"} k) [(info (assoc state :app/mode nil) "Cancelled") []]
       (#{"enter" "o"} k) (finish-pick state "-d")
       (and rebase? (= "a" k)) (finish-pick state "-A")
       (and rebase? (= "b" k)) (finish-pick state "-B")
       (and rebase? (= "s" k))
-      [(update-in state [:app/mode :source-flag] {"-r" "-s" "-s" "-b" "-b" "-r"}) []]
+      [(update-in state [:app/mode :mode/source-flag] {"-r" "-s" "-s" "-b" "-b" "-r"}) []]
       (contains? nav-actions action) (perform state action)
       :else [state []])))
 
@@ -601,47 +620,46 @@
         clamp #(max 0 (min % (dec (count matches))))]
     (cond
       (= "escape" k) [(assoc state :app/mode nil) []]
-      (= "enter" k) (if-let [item (get matches (clamp (:selected mode)))]
+      (= "enter" k) (if-let [item (get matches (clamp (:mode/selected mode)))]
                       (picker-choice state mode item)
                       [state []])
-      (#{"down" "ctrl+n" "ctrl+j"} k) [(assoc-in state [:app/mode :selected] (clamp (inc (:selected mode)))) []]
-      (#{"up" "ctrl+p" "ctrl+k"} k) [(assoc-in state [:app/mode :selected] (clamp (dec (:selected mode)))) []]
+      (#{"down" "ctrl+n" "ctrl+j"} k) [(assoc-in state [:app/mode :mode/selected] (clamp (inc (:mode/selected mode)))) []]
+      (#{"up" "ctrl+p" "ctrl+k"} k) [(assoc-in state [:app/mode :mode/selected] (clamp (dec (:mode/selected mode)))) []]
       :else
-      (let [[in _] (ti/text-input-update (:input mode) msg)]
-        [(update state :app/mode assoc :input in :selected 0) []]))))
+      (let [[in _] (ti/text-input-update (:mode/input mode) msg)]
+        [(update state :app/mode assoc :mode/input in :mode/selected 0) []]))))
 
 (defn- handle-menu-key [state k]
   (let [mode (:app/mode state)
-        option (first (filter #(= k (:key %)) (:options mode)))]
+        option (first (filter #(= k (:option/key %)) (:mode/options mode)))
+        flag (:option/toggle option)]
     (cond
       (#{"escape" "q"} k) [(assoc state :app/mode nil) []]
       (nil? option) [state []]
-      (:toggle option) [(update-in state [:app/mode :flags]
-                                   #(if (contains? % (:toggle option)) (disj % (:toggle option)) (conj % (:toggle option))))
-                        []]
+      flag [(update-in state [:app/mode :mode/flags] #(if (contains? % flag) (disj % flag) (conj % flag))) []]
       :else (menu-choice state mode option))))
 
 (defn- handle-key [state k msg]
   (let [state (assoc state :app/message nil)
         mode (:app/mode state)]
-    (case (:type mode)
+    (case (:mode/type mode)
       :help (cond
               (#{"escape" "q" "?"} k) [(assoc state :app/mode nil) []]
-              (#{"j" "down"} k) [(update-in state [:app/mode :offset] inc) []]
-              (#{"k" "up"} k) [(update-in state [:app/mode :offset] #(max 0 (dec %))) []]
+              (#{"j" "down"} k) [(update-in state [:app/mode :mode/offset] inc) []]
+              (#{"k" "up"} k) [(update-in state [:app/mode :mode/offset] #(max 0 (dec %))) []]
               :else [state []])
       :pick (handle-pick-key state k)
       :picker (handle-picker-key state k msg)
       :menu (handle-menu-key state k)
       :confirm (cond
-                 (#{"y" "enter"} k) (confirmed state (:on-yes mode))
+                 (#{"y" "enter"} k) (confirmed state (:mode/on-yes mode))
                  (#{"n" "escape" "q"} k) [(info (assoc state :app/mode nil) "Cancelled") []]
                  :else [state []])
       :input (cond
                (= "escape" k) [(assoc state :app/mode nil) []]
                (= "enter" k) (input-submitted state mode)
-               :else (let [[in _] (ti/text-input-update (:input mode) msg)]
-                       [(assoc-in state [:app/mode :input] in) []]))
+               :else (let [[in _] (ti/text-input-update (:mode/input mode) msg)]
+                       [(assoc-in state [:app/mode :mode/input] in) []]))
       (if-let [action (get keys/keymap k)]
         (perform state action)
         [state []]))))
@@ -652,45 +670,59 @@
 (defn- first-line [s]
   (first (remove str/blank? (str/split-lines (or s "")))))
 
-(defn- log-loaded [state {:keys [gen result]}]
+(defn- log-loaded [state {:msg/keys [gen result]}]
   (cond
     (not= gen (:app/log-gen state)) [state []]
 
-    (:error result)
-    (let [state (-> state (assoc :app/loading? false) (error (:error result)))]
+    (:jj/error result)
+    (let [state (-> state (assoc :app/loading? false) (error (:jj/error result)))]
       (if (not= (:app/revset state) (:app/good-revset state))
         ;; The new revset failed: go back to the last one that worked
         (reload (assoc state :app/revset (:app/good-revset state)))
         [state []]))
 
     :else
-    (let [ids (set (map :change-id (:entries result)))
+    (let [loaded (set (ids (:log/entries result)))
           first-load? (and (nil? (:app/cursor state)) (empty? (entries state)))
           state (-> state
                     (assoc :app/log result :app/loading? false :app/good-revset (:app/revset state))
-                    (update :app/marks #(into #{} (filter ids) %))
-                    (update :app/expanded #(into #{} (filter ids) %)))]
+                    (update :app/marks #(into #{} (filter loaded) %))
+                    (update :app/expanded #(into #{} (filter loaded) %)))]
       [(if first-load?
-         (if-let [wc (first (filter :working-copy? (:entries result)))]
-           (assoc state :app/cursor {:change-id (:change-id wc) :file nil})
+         (if-let [wc (first (filter :change/working-copy? (:log/entries result)))]
+           (assoc state :app/cursor (change-cursor wc))
            (set-cursor-index state (first (selectable-indices state))))
          state)
        []])))
 
-(defn- jj-done [state {:keys [fx result]}]
-  (let [state (assoc state :app/busy nil)
-        ok? (zero? (:exit result))
+(defn- jj-done [state {:msg/keys [effect result]}]
+  (let [{:jj/keys [exit out err]} result
+        {:fx/keys [success clear-marks?]} effect
+        state (assoc state :app/busy nil)
+        ok? (zero? exit)
         state (cond
-                (not ok?) (error state (str/trim (str (:err result))))
-                (:success fx) (info state (:success fx))
-                :else (info state (or (first-line (:err result)) (first-line (:out result)) "Done")))
-        state (cond-> state (and ok? (:clear-marks? fx)) (assoc :app/marks #{}))]
+                (not ok?) (error state (str/trim (str err)))
+                success (info state success)
+                :else (info state (or (first-line err) (first-line out) "Done")))
+        state (cond-> state (and ok? clear-marks?) (assoc :app/marks #{}))]
     (reload state)))
+
+(defn- bookmarks-loaded [state {:msg/keys [purpose result]}]
+  (if-let [err (:jj/error result)]
+    [(error state err) []]
+    (let [set? (= :bookmark-set purpose)
+          bms (cond->> (:jj/bookmarks result) set? (remove :bookmark/remote))
+          items (vec (for [{:bookmark/keys [ref commit description]} bms]
+                       {:item/label (str ref "  " commit "  " description)
+                        :item/value ref}))]
+      [(-> (assoc state :app/message nil)
+           (open-picker purpose (if set? "Set bookmark (type a new name to create)" "Diff branch") items))
+       []])))
 
 (defn after-exec
   "Called by the main loop once an interactive command finished."
   [state {:keys [exit]}]
-  (let [{:keys [reload?]} (:app/exec state)
+  (let [reload? (get-in state [:app/exec :exec/reload?])
         state (assoc state :app/exec nil :app/preview-cache {} :app/preview nil)
         state (if (and exit (not (zero? exit)))
                 (error state (str "Command exited with " exit))
@@ -702,39 +734,32 @@
   [state msg]
   (let [[state fx]
         (case (:type msg)
+          ;; charm's messages
           :key-press (handle-key state (keys/key-str msg) msg)
           :window-size [(assoc state :app/width (:width msg) :app/height (:height msg)) []]
           :environment [(assoc state :app/dark? (boolean (:dark-background? msg))) []]
-          :log-loaded (log-loaded state msg)
-          :jj-done (jj-done state msg)
-          :bookmarks-loaded
-          (let [{:keys [purpose result]} msg]
-            (if (:error result)
-              [(error state (:error result)) []]
-              (let [bms (:bookmarks result)
-                    items (for [b (if (= :bookmark-set purpose) (remove :remote bms) bms)]
-                            {:label (str (:ref b) "  " (:commit b) "  " (:description b))
-                             :value (:ref b)})]
-                [(-> (assoc state :app/message nil)
-                     (open-picker purpose (if (= :bookmark-set purpose)
-                                            "Set bookmark (type a new name to create)"
-                                            "Diff branch")
-                                  (vec items)))
-                 []])))
-          :diff-resolved (if-let [err (:error msg)]
-                           [(error state err) []]
-                           (open-diff (assoc state :app/message nil) (:target msg)))
-          :preview-fetch (if (= (:key msg) (get-in state [:app/preview :key]))
-                           [state [{:fx :preview :key (:key msg) :argv (first (:key msg)) :width (second (:key msg))}]]
-                           [state []])
-          :preview-loaded
-          (let [state (update state :app/preview-cache
-                              #(assoc (if (> (count %) 64) {} %) (:key msg) (:lines msg)))]
-            [(if (= (:key msg) (get-in state [:app/preview :key]))
-               (assoc state :app/preview {:key (:key msg) :lines (:lines msg) :offset 0})
+          :error [(error state (str "Error: " (ex-message (:error msg)))) []]
+
+          ;; jjtui.effects' messages
+          :msg/log-loaded (log-loaded state msg)
+          :msg/jj-done (jj-done state msg)
+          :msg/bookmarks-loaded (bookmarks-loaded state msg)
+          :msg/diff-resolved (let [result (:msg/result msg)]
+                               (if-let [err (:jj/error result)]
+                                 [(error state err) []]
+                                 (open-diff (assoc state :app/message nil) result)))
+          :msg/preview-fetch (let [k (:msg/key msg)]
+                               [state (if (= k (get-in state [:app/preview :preview/key]))
+                                        [{:fx/type :preview :fx/key k}]
+                                        [])])
+          :msg/preview-loaded
+          (let [{:msg/keys [key lines]} msg
+                state (update state :app/preview-cache #(assoc (if (> (count %) 64) {} %) key lines))]
+            [(if (= key (get-in state [:app/preview :preview/key]))
+               (assoc state :app/preview {:preview/key key :preview/lines lines :preview/offset 0})
                state)
              []])
-          :error [(error state (str "Error: " (ex-message (:error msg)))) []]
+
           [state []])]
     (sync-preview [(scroll-into-view state) fx])))
 

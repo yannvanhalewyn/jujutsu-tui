@@ -2,8 +2,9 @@
   "The app state's schema and read-only queries on it, shared by jjtui.app
    and jjtui.view.
 
-   Top-level state keys live in the :app namespace so they can't be confused
-   with the same names inside messages, effects, modes or diff targets."
+   Every map key is namespaced by the thing it describes (:app/ for the state
+   itself, :mode/, :preview/, :change/ …), so the same name in two shapes
+   can't be confused. Enum values and function options stay unqualified."
   (:require
    [charm.components.text-input :as ti]
    [clojure.string :as str]
@@ -16,59 +17,73 @@
   "Where the cursor is, by identity rather than row index, so it survives
    reloads that shift rows."
   [:map
-   [:change-id :string]
-   [:file [:maybe :string]]])
+   [:change/id :string]
+   [:file/path [:maybe :string]]])
 
-(def TextInput [:map [:type [:= :text-input]]])
+(def TextInput
+  "A charm text input; charm owns its keys."
+  [:map [:type [:= :text-input]]])
 
 (def PickerItem
   [:map
-   [:label :string]
-   [:value any?]
-   [:create? {:optional true} :boolean]])
+   [:item/label :string]
+   [:item/value any?]
+   [:item/create? {:optional true} :boolean]])
 
 (def MenuOption
   [:map
-   [:key :string]
-   [:label :string]
-   [:toggle {:optional true} :keyword]])
+   [:option/key :string]
+   [:option/label :string]
+   [:option/toggle {:optional true :doc "Flag the key toggles instead of choosing"} :keyword]])
 
 (def Mode
   "The modal interaction in progress, on top of normal mode."
-  [:multi {:dispatch :type}
-   [:help [:map [:type [:= :help]] [:offset :int]]]
+  [:multi {:dispatch :mode/type}
+   [:help [:map [:mode/type [:= :help]] [:mode/offset :int]]]
    [:pick [:map
-           [:type [:= :pick]]
-           [:action [:enum :rebase :squash-into]]
-           [:sources [:vector :string]]
-           [:source-flag [:enum "-r" "-s" "-b"]]]]
+           [:mode/type [:= :pick]]
+           [:mode/action [:enum :rebase :squash-into]]
+           [:mode/sources {:doc "Change ids"} [:vector :string]]
+           [:mode/source-flag [:enum "-r" "-s" "-b"]]]]
    [:picker [:map
-             [:type [:= :picker]]
-             [:purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set]]
-             [:title :string]
-             [:items [:vector PickerItem]]
-             [:selected :int]
-             [:input TextInput]
-             [:op {:optional true} [:enum :delete :rename]]]]
+             [:mode/type [:= :picker]]
+             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set]]
+             [:mode/title :string]
+             [:mode/items [:vector PickerItem]]
+             [:mode/selected :int]
+             [:mode/input TextInput]
+             [:mode/op {:optional true} [:enum :delete :rename]]]]
    [:menu [:map
-           [:type [:= :menu]]
-           [:purpose [:enum :new :bookmark]]
-           [:title :string]
-           [:options [:vector MenuOption]]
-           [:flags [:set :keyword]]
-           [:entry log/Entry]]]
+           [:mode/type [:= :menu]]
+           [:mode/purpose [:enum :new :bookmark]]
+           [:mode/title :string]
+           [:mode/options [:vector MenuOption]]
+           [:mode/flags [:set :keyword]]
+           [:mode/entry log/Entry]]]
    [:confirm [:map
-              [:type [:= :confirm]]
-              [:prompt [:vector :string]]
-              [:on-yes [:or
-                        [:tuple [:= :abandon] [:vector :string]]
-                        [:tuple [:= :bookmark-delete] :string]]]]]
+              [:mode/type [:= :confirm]]
+              [:mode/prompt [:vector :string]]
+              [:mode/on-yes [:or
+                             [:tuple [:= :abandon] [:vector :string]]
+                             [:tuple [:= :bookmark-delete] :string]]]]]
    [:input [:map
-            [:type [:= :input]]
-            [:purpose [:enum :revset :rename]]
-            [:title :string]
-            [:input TextInput]
-            [:bookmark {:optional true} :string]]]])
+            [:mode/type [:= :input]]
+            [:mode/purpose [:enum :revset :rename]]
+            [:mode/title :string]
+            [:mode/input TextInput]
+            [:mode/bookmark {:optional true} :string]]]])
+
+(def DiffTarget
+  "What a diff applies to. Tools that need commit ids get :target/from-sha
+   and :target/to-sha, resolved from the revs first when they aren't known."
+  [:map
+   [:target/revset :string]
+   [:target/files [:vector :string]]
+   [:target/from-rev {:optional true} :string]
+   [:target/to-rev {:optional true} :string]
+   [:target/from-commit? {:optional true :doc "from-rev is the base itself, not its child"} :boolean]
+   [:target/from-sha {:optional true :doc "Empty for the root commit"} :string]
+   [:target/to-sha {:optional true} :string]])
 
 (def PreviewKey
   "[argv width] of the preview command, which identifies its output."
@@ -76,22 +91,22 @@
 
 (def Preview
   [:map
-   [:key PreviewKey]
-   [:lines [:maybe [:vector :string]]]
-   [:offset :int]
-   [:loading? {:optional true} :boolean]])
+   [:preview/key PreviewKey]
+   [:preview/lines [:maybe [:vector :string]]]
+   [:preview/offset :int]
+   [:preview/loading? {:optional true} :boolean]])
 
 (def Exec
   "An interactive command to run once the TUI has stopped."
   [:map
-   [:argv [:vector :string]]
-   [:wait? [:maybe :boolean]]
-   [:reload? :boolean]])
+   [:exec/argv [:vector :string]]
+   [:exec/wait? [:maybe :boolean]]
+   [:exec/reload? :boolean]])
 
 (def Message
   [:map
-   [:text :string]
-   [:level [:enum :info :error]]])
+   [:message/text :string]
+   [:message/level [:enum :info :error]]])
 
 (def State
   [:map {:closed true}
@@ -127,24 +142,26 @@
 ;; ---------------------------------------------------------------------------
 ;; Log
 
-(defn rows [state] (get-in state [:app/log :rows]))
-(defn entries [state] (get-in state [:app/log :entries]))
+(defn rows [state] (get-in state [:app/log :log/rows]))
+(defn entries [state] (get-in state [:app/log :log/entries]))
+
+(defn row-entry [state row]
+  (get (entries state) (:row/entry row)))
 
 ;; ---------------------------------------------------------------------------
 ;; Cursor
 
 (defn row-cursor [state row]
   (when row
-    {:change-id (:change-id (get (entries state) (:entry row)))
-     :file (get-in row [:file :path])}))
+    {:change/id (:change/id (row-entry state row))
+     :file/path (get-in row [:row/file :file/path])}))
 
 (defn selectable-indices [state]
   (into [] (keep-indexed (fn [i row] (when (log/selectable? row) i))) (rows state)))
 
-(defn- row-matches? [state row {:keys [change-id file]}]
+(defn- row-matches? [state row cursor]
   (and (log/selectable? row)
-       (= change-id (:change-id (get (entries state) (:entry row))))
-       (= file (get-in row [:file :path]))))
+       (= cursor (row-cursor state row))))
 
 (defn cursor-index
   "Index of the cursor's row: the cursor's change (and file), else that
@@ -152,10 +169,10 @@
    was."
   [state]
   (let [rs (rows state)
-        {:keys [change-id] :as cursor} (:app/cursor state)
+        {:change/keys [id] :as cursor} (:app/cursor state)
         find-row (fn [c] (first (keep-indexed (fn [i row] (when (row-matches? state row c) i)) rs)))]
     (or (when cursor (find-row cursor))
-        (when change-id (find-row {:change-id change-id :file nil}))
+        (when id (find-row {:change/id id :file/path nil}))
         (let [idxs (selectable-indices state)]
           (when (seq idxs)
             (or (first (filter #(>= % (:app/cursor-row state)) idxs))
@@ -167,7 +184,7 @@
 
 (defn cursor-entry [state]
   (when-let [row (cursor-row state)]
-    (get (entries state) (:entry row))))
+    (row-entry state row)))
 
 ;; ---------------------------------------------------------------------------
 ;; Pickers
@@ -193,17 +210,16 @@
 (defn picker-matches
   "The picker's visible items: matching items, best first. The bookmark picker
    also offers to create the typed name, after any matches."
-  [{:keys [items input purpose]}]
+  [{:mode/keys [items input purpose]}]
   (let [query (str/trim (ti/value input))
         matched (->> items
                      (keep (fn [item]
-                             (when-let [s (fuzzy-score query (:label item))]
+                             (when-let [s (fuzzy-score query (:item/label item))]
                                [s item])))
                      (sort-by first)
                      (mapv second))]
     (if (and (= :bookmark-set purpose)
              (not (str/blank? query))
-             (not-any? #(= query (:value %)) items))
-      (conj matched {:label (str "+ create " query) :value query :create? true})
+             (not-any? #(= query (:item/value %)) items))
+      (conj matched {:item/label (str "+ create " query) :item/value query :item/create? true})
       matched)))
-
