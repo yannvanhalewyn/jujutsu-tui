@@ -258,12 +258,12 @@ ln -s $(pwd)/bin/jjtui ~/bin/jjtui</pre></div>
       <h3>Develop</h3>
       <div class="code"><button class="copy" type="button">Copy</button><pre data-sh>bb start [args]       # run jjtui from the checkout (same args as jjtui)
 bb test               # run the test suite (includes jj integration tests)
-bb demo-repo [dir]    # throwaway repo, default /tmp/jjtui-demo
-bb demo-conflict-repo [dir]  # throwaway repo with a conflicted rebase, default /tmp/jjtui-conflict-demo
-bb demo-megamerge-repo [dir] # throwaway repo with a megamerge, default /tmp/jjtui-megamerge-demo</pre></div>
-      <p class="muted"><code>bb demo-repo</code> also creates a bare origin at <code>/tmp/jjtui-demo-origin.git</code> and pushes <code>main</code> (so it's immutable), plus <code>feature/login</code> (2 changes), <code>feature/docs</code> and a WIP change — a good playground for every key below.</p>
-      <p class="muted"><code>bb demo-conflict-repo</code> builds a small Clojure project where <code>feature/discounts</code> (2 changes) was rebased onto a pushed <code>main</code> that rewrote the same function, so both changes are conflicted in <code>src/shop/cart.clj</code>; <code>@</code> is an empty change on top of the first one, ready for resolving.</p>
-      <p class="muted"><code>bb demo-megamerge-repo</code> builds a small Clojure project in the megamerge workflow: <code>feature/tags</code> (2 changes) stacked on <code>refactor/store</code>, <code>docs/usage</code> and two unbookmarked dev changes, all off a pushed <code>main</code>, merged with <code>jj new feature/tags docs/usage &lt;dev tip&gt;</code> into a <code>megamerge</code> change; <code>@</code> is an empty change on top of it.</p>
+bb seed               # list demo repo recipes
+bb seed &lt;recipe&gt; [dir] # build a throwaway demo repo, default /tmp/jjtui-&lt;recipe&gt;</pre></div>
+      <p class="muted">Each recipe also creates a bare origin next to the repo (e.g. <code>/tmp/jjtui-basic-origin.git</code>) and pushes <code>main</code>, so it's immutable. Recipes live in <code>dev/jjtui/seed.clj</code>, built with the helpers in <code>dev/jjtui/repo_seed.clj</code>.</p>
+      <p class="muted"><code>bb seed basic</code>: <code>feature/login</code> (2 changes), <code>feature/docs</code> and a WIP change — a good playground for every key below.</p>
+      <p class="muted"><code>bb seed conflict</code> builds a small Clojure project where <code>feature/discounts</code> (2 changes) was rebased onto a pushed <code>main</code> that rewrote the same function, so both changes are conflicted in <code>src/shop/cart.clj</code>; <code>@</code> is an empty change on top of the first one, ready for resolving.</p>
+      <p class="muted"><code>bb seed megamerge</code> builds a small Clojure project in the megamerge workflow: <code>feature/tags</code> (2 changes) stacked on <code>refactor/store</code>, <code>docs/usage</code> and two unbookmarked dev changes, all off a pushed <code>main</code>, merged with <code>jj new feature/tags docs/usage &lt;dev tip&gt;</code> into a <code>megamerge</code> change; <code>@</code> is an empty change on top of it.</p>
       <h3>Layout at a glance</h3>
       <ul>
         <li><b>Log pane</b> — jj's own colored graph log (<code>jj log</code> with your <code>templates.log</code>, default revset or <code>-r</code>). The cursor is a highlighted change block; the gutter shows <code>●</code> for marked changes.</li>

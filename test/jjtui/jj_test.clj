@@ -4,7 +4,7 @@
   (:require
    [babashka.fs :as fs]
    [clojure.test :refer [deftest is testing]]
-   [jjtui.demo :as demo]
+   [jjtui.seed :as seed]
    [jjtui.jj :as jj]
    [jjtui.log :as log]
    [malli.core :as m]
@@ -14,7 +14,7 @@
 
 (deftest real-repo-test
   (fs/with-temp-dir [tmp {}]
-    (let [dir (demo/create! (str (fs/path tmp "repo")))
+    (let [dir (seed/create! :basic (str (fs/path tmp "repo")))
           base (jj/base-template dir)]
       (testing "log entries carry the hidden fields"
         (let [{:log/keys [entries rows] :as res} (jj/load-log dir {:base-template base :revset "::@ | feature/docs"})]
