@@ -259,9 +259,11 @@ ln -s $(pwd)/bin/jjtui ~/bin/jjtui</pre></div>
       <div class="code"><button class="copy" type="button">Copy</button><pre data-sh>bb start [args]       # run jjtui from the checkout (same args as jjtui)
 bb test               # run the test suite (includes jj integration tests)
 bb demo-repo [dir]    # throwaway repo, default /tmp/jjtui-demo
-bb demo-conflict-repo [dir]  # throwaway repo with a conflicted rebase, default /tmp/jjtui-conflict-demo</pre></div>
+bb demo-conflict-repo [dir]  # throwaway repo with a conflicted rebase, default /tmp/jjtui-conflict-demo
+bb demo-megamerge-repo [dir] # throwaway repo with a megamerge, default /tmp/jjtui-megamerge-demo</pre></div>
       <p class="muted"><code>bb demo-repo</code> also creates a bare origin at <code>/tmp/jjtui-demo-origin.git</code> and pushes <code>main</code> (so it's immutable), plus <code>feature/login</code> (2 changes), <code>feature/docs</code> and a WIP change — a good playground for every key below.</p>
       <p class="muted"><code>bb demo-conflict-repo</code> builds a small Clojure project where <code>feature/discounts</code> (2 changes) was rebased onto a pushed <code>main</code> that rewrote the same function, so both changes are conflicted in <code>src/shop/cart.clj</code>; <code>@</code> is an empty change on top of the first one, ready for resolving.</p>
+      <p class="muted"><code>bb demo-megamerge-repo</code> builds a small Clojure project in the megamerge workflow: <code>feature/tags</code> (2 changes) stacked on <code>refactor/store</code>, <code>docs/usage</code> and two unbookmarked dev changes, all off a pushed <code>main</code>, merged with <code>jj new feature/tags docs/usage &lt;dev tip&gt;</code> into a <code>megamerge</code> change; <code>@</code> is an empty change on top of it.</p>
       <h3>Layout at a glance</h3>
       <ul>
         <li><b>Log pane</b> — jj's own colored graph log (<code>jj log</code> with your <code>templates.log</code>, default revset or <code>-r</code>). The cursor is a highlighted change block; the gutter shows <code>●</code> for marked changes.</li>
@@ -329,6 +331,15 @@ bb demo-conflict-repo [dir]  # throwaway repo with a conflicted rebase, default 
 
       <h3>External diff tools</h3>
       <p class="muted">Used by <kbd>enter</kbd> and <kbd>D</kbd>; switch the active one at runtime with <kbd>v</kbd>. A <b>string</b> runs with <code>sh -c</code> (pipes ok, every substituted value shell-quoted). A <b>vector</b> is argv; a <code>"$files"</code> element expands to zero or more args. A <b>map</b> <code>{:cmd … :wait? true}</code> wraps either form and waits for a key after the tool exits (for tools that print and exit).</p>
+      <p class="muted">Besides <code>:jj</code> and <code>:difftool</code>, jjtui adds a preset for each of these programs it finds on <code>PATH</code> at startup. Defining the same key in <code>:diff-tools</code> replaces the preset.</p>
+      <table class="t"><thead><tr><th>Key</th><th>Program</th><th>Command</th></tr></thead><tbody>
+        <tr><td class="k"><code>:difftastic</code></td><td><code>difft</code></td><td><code>jj diff --tool difft -r $revset $files</code>, paged through <code>less -R</code></td></tr>
+        <tr><td class="k"><code>:delta</code></td><td><code>delta</code></td><td><code>jj diff --git -r $revset $files | delta --paging=always</code></td></tr>
+        <tr><td class="k"><code>:diff-so-fancy</code></td><td><code>diff-so-fancy</code></td><td><code>jj diff --git --color=always -r $revset $files | diff-so-fancy | less -R</code></td></tr>
+        <tr><td class="k"><code>:meld</code></td><td><code>meld</code></td><td><code>jj diff --tool meld -r $revset $files</code> (directory diff)</td></tr>
+        <tr><td class="k"><code>:kdiff3</code></td><td><code>kdiff3</code></td><td><code>jj diff --tool kdiff3 -r $revset $files</code> (directory diff)</td></tr>
+        <tr><td class="k"><code>:vscode</code></td><td><code>code</code></td><td><code>jj diff --tool vscode -r $revset $files</code> (one file at a time)</td></tr>
+      </tbody></table>
       <div class="tabs" id="toolTabs" role="tablist"></div>
       <div class="tabpanel" id="toolPanel"></div>
 
@@ -430,7 +441,7 @@ const ROADMAP = [
   { title: 'Marks', area: 'log', status: 'done', notes: 'm / space toggle, c / esc clear; ● gutter; batch semantics for enter, n, a, r, s, S, p, P.' },
   { title: 'Inline file lists', area: 'log', status: 'done', notes: 'tab for the cursor change, shift+tab / i for all; file rows are selectable.' },
   { title: 'Split diff pane', area: 'diff', status: 'done', notes: '| toggles; follows the cursor; J/K scroll, ctrl+f/ctrl+b page, < / > resize (5% steps, 20–80%).' },
-  { title: 'External diff tools + picker', area: 'diff', status: 'done', notes: 'enter opens the active tool (file row wins over marks); v picks among :diff-tools; {:cmd … :wait? true} map form.' },
+  { title: 'External diff tools + picker', area: 'diff', status: 'done', notes: 'enter opens the active tool (file row wins over marks); v picks among :diff-tools; {:cmd … :wait? true} map form; presets for difft, delta, diff-so-fancy, meld, kdiff3, code when on PATH.' },
   { title: 'Branch diff picker', area: 'diff', status: 'done', notes: 'D: fuzzy bookmark picker, $revset = fork_point(trunk() | B)..B.' },
   { title: 'Rebase pick mode', area: 'operations', status: 'done', notes: 'r: enter/o onto, a after, b before, s cycles -r → -s → -b.' },
   { title: 'Squash', area: 'operations', status: 'done', notes: 's into parent or marks into cursor (--from "a | b"); S into a picked target. Background unless descriptions need combining.' },
@@ -555,12 +566,10 @@ const DEFAULT_CONFIG = [
   ' ;; Vector = argv, a "$files" element expands to zero or more args.',
   ' ;; Map = {:cmd <string or vector> :wait? true}: "Press any key to return" afterwards (for tools that print and exit).',
   ' ;; The jj-based defaults force paging through `less -R` so the output doesn\'t flash by when the TUI resumes.',
-  ' :diff-tools {:jj         ' + PAGED_JJ,
-  '                           "diff" "-r" "$revset" "$files"]',
-  '              :difftastic ' + PAGED_JJ,
-  '                           "diff" "--tool" "difft" "-r" "$revset" "$files"]',
-  '              :delta      "jj diff --git -r $revset $files | delta --paging=always"',
-  '              :difftool   ["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]}',
+  ' ;; Presets (:difftastic :delta :diff-so-fancy :meld :kdiff3 :vscode) are added when their program is on PATH.',
+  ' :diff-tools {:jj       ' + PAGED_JJ,
+  '                         "diff" "-r" "$revset" "$files"]',
+  '              :difftool ["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]}',
   ' ;; command for the split diff pane (stdout is captured, ANSI colors kept)',
   ' :preview-command ["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]',
   ' ;; examples:',
@@ -576,8 +585,8 @@ const DEFAULT_CONFIG = [
 // example: true → shown in the docs tabs only, not part of the defaults (and not offered by the mock's `v` picker)
 const DIFF_TOOLS = {
   jj:         { edn: PAGED_JJ + '\n             "diff" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '-r', '$revset', '$files']), note: "jj's built-in diff, honouring your ui.diff settings; paging forced through less -R." },
-  difftastic: { edn: PAGED_JJ + '\n             "diff" "--tool" "difft" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '--tool', 'difft', '-r', '$revset', '$files']), note: 'Structural diff via difftastic (needs the difft binary on PATH); paging forced through less -R.' },
-  delta:      { edn: '"jj diff --git -r $revset $files | delta --paging=always"', cmd: 'jj diff --git -r $revset $files | delta --paging=always', note: 'A string runs with sh -c, so pipes work; every substituted value is shell-quoted.' },
+  difftastic: { edn: PAGED_JJ + '\n             "diff" "--tool" "difft" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '--tool', 'difft', '-r', '$revset', '$files']), note: 'Preset, offered when difft is on PATH. Structural diff via difftastic; paging forced through less -R.' },
+  delta:      { edn: '"jj diff --git -r $revset $files | delta --paging=always"', cmd: 'jj diff --git -r $revset $files | delta --paging=always', note: 'Preset, offered when delta is on PATH. A string runs with sh -c, so pipes work; every substituted value is shell-quoted.' },
   difftool:   { edn: '["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]', cmd: ['git', 'difftool', '--dir-diff', '$from-sha', '$to-sha', '--', '$files'], note: 'Your configured git difftool in dir-diff mode. Requires a colocated git repo.' },
   'nvim + diffview': { key: 'nvim-difftool', example: true, edn: '["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]', cmd: ['nvim', '-c', 'DiffviewOpen $from-sha..$to-sha'], note: 'Example, not a default. Opens Neovim with sindrets/diffview.nvim on the commit range. Requires a colocated git repo.' },
   'nvim + difftastic': { key: 'nvim-difftastic', example: true, edn: '["nvim" "-c" "Difft $revset"]', cmd: ['nvim', '-c', 'Difft $revset'], note: 'Example, not a default. Opens Neovim with clabby/difftastic.nvim; :Difft <revset> runs jj diff -r <revset> --tool difft, so ranges (D) and marked sets work. Shows the whole revset even on a file row. No colocated git repo needed.' },
@@ -590,7 +599,7 @@ const PREVIEWS = {
 };
 const CONFIG_KEYS = [
   [':diff-tool', ':jj', 'External diff tool used by enter / D. One of the keys in :diff-tools.'],
-  [':diff-tools', '{:jj … :difftool …}', 'Named diff tools. String = run with `sh -c`; vector = argv with `"$files"` expanding to zero or more args; map = `{:cmd … :wait? true}` to wait for a key afterwards.'],
+  [':diff-tools', '{:jj … :difftool …}', 'Named diff tools, plus presets for programs found on PATH. String = run with `sh -c`; vector = argv with `"$files"` expanding to zero or more args; map = `{:cmd … :wait? true}` to wait for a key afterwards. A key you define replaces the preset of that name.'],
   [':preview-command', '["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]', 'Command for the split diff pane (stdout is captured, ANSI colors kept).'],
   [':revset', 'nil', "Log revset; nil = jj's `revsets.log`."],
   [':log-template', 'nil', "nil = jj's `templates.log`."],

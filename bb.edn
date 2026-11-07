@@ -20,4 +20,9 @@
   demo-conflict-repo {:doc "Create a throwaway jj repo with a conflicted rebase (default /tmp/jjtui-conflict-demo)"
                       :extra-paths ["dev"]
                       :requires ([jjtui.demo-conflict :as demo])
-                      :task (println "Created" (demo/create! (or (first *command-line-args*) "/tmp/jjtui-conflict-demo")))}}}
+                      :task (println "Created" (demo/create! (or (first *command-line-args*) "/tmp/jjtui-conflict-demo")))}
+
+  demo-megamerge-repo {:doc "Create a throwaway jj repo with a megamerge of a feature, docs and dev changes (default /tmp/jjtui-megamerge-demo)"
+                       :extra-paths ["dev"]
+                       :requires ([jjtui.demo-megamerge :as demo])
+                       :task (println "Created" (demo/create! (or (first *command-line-args*) "/tmp/jjtui-megamerge-demo")))}}}
