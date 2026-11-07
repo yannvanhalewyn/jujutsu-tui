@@ -19,8 +19,8 @@
       (testing "log entries carry the hidden fields"
         (let [{:log/keys [entries rows] :as res} (jj/load-log dir {:base-template base :revset "::@ | feature/docs"})]
           (is (nil? (explain log/Log res)))
-          (is (= ["" "WIP: remember me" "Validate login input" "Add login form"
-                  "Document the greeting" "Initial commit" ""]
+          (is (= ["" "feat: remember me (WIP)" "feat: validate login input" "feat: add login form"
+                  "docs: document the greeting" "chore: initial commit" ""]
                  (map :change/description entries)))
           (is (:change/working-copy? (first entries)))
           (is (= ["feature/login"] (:change/bookmarks (nth entries 2))))
@@ -28,9 +28,9 @@
           (is (not-any? :row/file rows))))
 
       (testing "file lines for expanded changes only"
-        (let [{:log/keys [entries rows]} (jj/load-log dir {:base-template base :files "description(substring:\"Validate\")"})
+        (let [{:log/keys [entries rows]} (jj/load-log dir {:base-template base :files "description(substring:\"validate\")"})
               files (filter :row/file rows)]
-          (is (= #{"Validate login input"} (set (map #(:change/description (get entries (:row/entry %))) files))))
+          (is (= #{"feat: validate login input"} (set (map #(:change/description (get entries (:row/entry %))) files))))
           (is (= [{:file/status "M" :file/path "README.md" :file/source nil}
                   {:file/status "M" :file/path "src/login.clj" :file/source nil}]
                  (map :row/file files)))))

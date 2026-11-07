@@ -9,31 +9,31 @@
 ;; basic ----------------------------------------------------------------------
 
 (defn- basic!
-  "main:          Initial commit (pushed)
-   feature/login: Add login form -> Validate login input
-   feature/docs:  Document the greeting (deletes README.md)
-   WIP:           remember me, on feature/login
+  "main:          chore: initial commit (pushed)
+   feature/login: feat: add login form -> feat: validate login input
+   feature/docs:  docs: document the greeting (deletes README.md)
+   WIP:           feat: remember me (WIP), on feature/login
    @:             empty change on top of the WIP"
   [dir]
-  (rs/amend! dir {:message "Initial commit"
+  (rs/amend! dir {:message "chore: initial commit"
                   :files {"README.md" "# Demo\n"
                           "src/app.clj" "(ns app)\n\n(defn greet [n]\n  (str \"Hello \" n))\n"}
                   :bookmark "main"
                   :push? true})
   (rs/change! dir {:on "main"
-                   :message "Add login form"
+                   :message "feat: add login form"
                    :files {"src/login.clj" "(ns login)\n\n(defn form [] [:form])\n"}})
-  (rs/change! dir {:message "Validate login input"
+  (rs/change! dir {:message "feat: validate login input"
                    :files {"src/login.clj" "(ns login)\n\n(defn form [] [:form])\n\n(defn valid? [u] (some? u))\n"
                            "README.md" "# Demo\n\nNow with login.\n"}
                    :bookmark "feature/login"})
   (rs/change! dir {:on "main"
-                   :message "Document the greeting"
+                   :message "docs: document the greeting"
                    :files {"docs/greeting.md" "Call `greet` with a name.\n"
                            "README.md" nil}
                    :bookmark "feature/docs"})
   (rs/change! dir {:on "feature/login"
-                   :message "WIP: remember me"
+                   :message "feat: remember me (WIP)"
                    :files {"src/login.clj" "(ns login)\n\n(defn form [] [:form [:checkbox \"remember\"]])\n\n(defn valid? [u] (some? u))\n"}})
   (rs/change! dir {}))
 
@@ -101,25 +101,25 @@
 ")
 
 (defn- conflict!
-  "main:              Initial commit -> Charge sales tax (pushed)
-   feature/discounts: Apply discount codes -> Test discount codes, rebased
-                      onto main, both conflicted in src/shop/cart.clj
-   @:                 empty change on top of Apply discount codes, for resolving"
+  "main:              chore: initial commit -> feat: charge sales tax (pushed)
+   feature/discounts: feat: apply discount codes -> test: cover discount codes,
+                      rebased onto main, both conflicted in src/shop/cart.clj
+   @:                 empty change on top of the discount codes, for resolving"
   [dir]
-  (rs/amend! dir {:message "Initial commit"
+  (rs/amend! dir {:message "chore: initial commit"
                   :files {"deps.edn" "{:paths [\"src\"]\n :aliases {:test {:extra-paths [\"test\"]}}}\n"
                           "src/shop/cart.clj" cart-base}
                   :bookmark "main"
                   :push? true})
   (rs/change! dir {:on "main"
-                   :message "Apply discount codes"
+                   :message "feat: apply discount codes"
                    :files {"src/shop/cart.clj" cart-discount}})
-  (rs/change! dir {:message "Test discount codes"
+  (rs/change! dir {:message "test: cover discount codes"
                    :files {"test/shop/cart_test.clj" cart-test}
                    :bookmark "feature/discounts"})
   ;; meanwhile main rewrites the same function
   (rs/change! dir {:on "main"
-                   :message "Charge sales tax"
+                   :message "feat: charge sales tax"
                    :files {"src/shop/cart.clj" cart-tax}
                    :bookmark "main"
                    :push? true})
@@ -306,15 +306,17 @@ A tiny todo list. See [docs/usage.md](docs/usage.md) to get started.
 ")
 
 (defn- megamerge!
-  "main:            Initial commit (pushed)
-   refactor/store:  Extract todo store (on main)
-   feature/tags:    Tag todos -> Filter todos by tag (on refactor/store)
-   docs/usage:      Document usage (on main)
-   dev changes:     Add :dev alias -> Add REPL helpers (on main, no bookmark)
+  "main:            chore: initial commit (pushed)
+   refactor/store:  refactor: extract todo store (on main)
+   feature/tags:    feat: tag todos -> feat: filter todos by tag
+                    (on refactor/store)
+   docs/usage:      docs: document usage (on main)
+   dev changes:     dev: add :dev alias -> dev: add REPL helpers
+                    (on main, no bookmark)
    megamerge:       jj new feature/tags docs/usage <dev tip>
    @:               empty change on top of the megamerge"
   [dir]
-  (rs/amend! dir {:message "Initial commit"
+  (rs/amend! dir {:message "chore: initial commit"
                   :files {"deps.edn" deps
                           "README.md" readme
                           "src/todo/core.clj" core-base}
@@ -322,32 +324,32 @@ A tiny todo list. See [docs/usage.md](docs/usage.md) to get started.
                   :push? true})
   ;; pull the pure todo logic out of the atom-wrangling ns
   (rs/change! dir {:on "main"
-                   :message "Extract todo store"
+                   :message "refactor: extract todo store"
                    :files {"src/todo/store.clj" store-refactor
                            "src/todo/core.clj" core-refactor}
                    :bookmark "refactor/store"})
   (rs/change! dir {:on "refactor/store"
-                   :message "Tag todos"
+                   :message "feat: tag todos"
                    :files {"src/todo/store.clj" store-tags
                            "src/todo/core.clj" core-tags}})
-  (rs/change! dir {:message "Filter todos by tag"
+  (rs/change! dir {:message "feat: filter todos by tag"
                    :files {"src/todo/store.clj" store-filter
                            "src/todo/core.clj" core-filter
                            "test/todo/store_test.clj" store-test}
                    :bookmark "feature/tags"})
   (rs/change! dir {:on "main"
-                   :message "Document usage"
+                   :message "docs: document usage"
                    :files {"README.md" readme-docs
                            "docs/usage.md" usage}
                    :bookmark "docs/usage"})
   ;; local dev setup, never meant to be pushed
   (rs/change! dir {:on "main"
-                   :message "Add :dev alias"
+                   :message "dev: add :dev alias"
                    :files {"deps.edn" deps-dev}})
-  (rs/change! dir {:message "Add REPL helpers"
+  (rs/change! dir {:message "dev: add REPL helpers"
                    :files {"dev/user.clj" user-clj}})
   ;; @ is the dev tip
-  (rs/change! dir {:on ["feature/tags" "docs/usage" "@"] :message "megamerge"})
+  (rs/change! dir {:on ["feature/tags" "docs/usage" "@"] :message "chore: megamerge"})
   (rs/change! dir {}))
 
 ;; registry -------------------------------------------------------------------
