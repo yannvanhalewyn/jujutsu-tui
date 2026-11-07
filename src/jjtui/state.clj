@@ -2,9 +2,10 @@
   "The app state's schema and read-only queries on it, shared by jjtui.app
    and jjtui.view.
 
-   Every map key is namespaced by the thing it describes (:app/ for the state
-   itself, :mode/, :preview/, :change/ …), so the same name in two shapes
-   can't be confused. Enum values and function options stay unqualified."
+   Every map key is namespaced by the thing it describes (:app/ for the
+   session, :repo/ for the open repo, :mode/, :preview/, :change/ …), so the
+   same name in two shapes can't be confused. Enum values and function
+   options stay unqualified."
   (:require
    [charm.components.text-input :as ti]
    [clojure.string :as str]
@@ -36,10 +37,21 @@
    [:option/label :string]
    [:option/toggle {:optional true :doc "Flag the key toggles instead of choosing"} :keyword]])
 
+(def Choice
+  "An option of the repo chooser."
+  [:map
+   [:choice/key {:doc "Hotkey"} :string]
+   [:choice/label :string]
+   [:choice/detail :string]
+   [:choice/action {:doc "[:init git-root] or [:open dir]"} [:tuple [:enum :init :open] :string]]])
+
 (def Mode
   "The modal interaction in progress, on top of normal mode."
   [:multi {:dispatch :mode/type}
-   [:help [:map [:mode/type [:= :help]] [:mode/offset :int]]]
+   [:help [:map
+           [:mode/type [:= :help]]
+           [:mode/offset :int]
+           [:mode/search {:doc "Filters the bindings; focused while typing"} TextInput]]]
    [:pick [:map
            [:mode/type [:= :pick]]
            [:mode/action [:enum :rebase :squash-into]]
@@ -71,7 +83,12 @@
             [:mode/purpose [:enum :revset :rename]]
             [:mode/title :string]
             [:mode/input TextInput]
-            [:mode/bookmark {:optional true} :string]]]])
+            [:mode/bookmark {:optional true} :string]]]
+   [:no-repo [:map
+              [:mode/type [:= :no-repo]]
+              [:mode/git-root {:doc "The git repo without jj that jjtui started in"} :string]
+              [:mode/choices [:vector Choice]]
+              [:mode/selected :int]]]])
 
 (def DiffTarget
   "What a diff applies to. Tools that need commit ids get :target/from-sha
@@ -108,42 +125,52 @@
    [:message/text :string]
    [:message/level [:enum :info :error]]])
 
-(def State
+(def Repo
+  "The open jj repo: everything that's dropped and fetched again when
+   switching repos."
   [:map {:closed true}
-   [:app/dir :string]
-   [:app/config [:map]]
-   [:app/base-template :string]
-   [:app/revset [:maybe :string]]
-   [:app/good-revset {:doc "Last revset that loaded, to fall back to"} [:maybe :string]]
-   [:app/log log/Log]
-   [:app/log-gen {:doc "Bumped per load; stale results are dropped"} :int]
-   [:app/loading? :boolean]
-   [:app/cursor [:maybe Cursor]]
-   [:app/cursor-row {:doc "Last cursor row index, for when its change disappears"} :int]
-   [:app/offset {:doc "First visible log row"} :int]
-   [:app/marks [:set :string]]
-   [:app/expanded {:doc "Change ids whose files are shown"} [:set :string]]
-   [:app/show-files? :boolean]
-   [:app/split? :boolean]
-   [:app/split-ratio number?]
-   [:app/preview [:maybe Preview]]
-   [:app/preview-cache [:map-of PreviewKey [:vector :string]]]
-   [:app/ignore-immutable? :boolean]
-   [:app/diff-tool :keyword]
-   [:app/mode [:maybe Mode]]
-   [:app/message [:maybe Message]]
-   [:app/busy {:doc "Label of the running background jj command"} [:maybe :string]]
-   [:app/width :int]
-   [:app/height :int]
-   [:app/dark? :boolean]
-   [:app/dark-known {:optional true :doc "dark? carried across restarts"} [:maybe :boolean]]
-   [:app/exec [:maybe Exec]]])
+   [:repo/dir {:doc "Canonical workspace root"} :string]
+   [:repo/base-template :string]
+   [:repo/revset [:maybe :string]]
+   [:repo/good-revset {:doc "Last revset that loaded, to fall back to"} [:maybe :string]]
+   [:repo/log log/Log]
+   [:repo/loading? :boolean]
+   [:repo/cursor [:maybe Cursor]]
+   [:repo/cursor-row {:doc "Last cursor row index, for when its change disappears"} :int]
+   [:repo/offset {:doc "First visible log row"} :int]
+   [:repo/marks [:set :string]]
+   [:repo/expanded {:doc "Change ids whose files are shown"} [:set :string]]
+   [:repo/preview [:maybe Preview]]
+   [:repo/preview-cache [:map-of PreviewKey [:vector :string]]]
+   [:repo/ignore-immutable? {:doc "Per repo, so it never carries over by surprise"} :boolean]])
+
+(def State
+  "The session (terminal, preferences, modes) and the open repo."
+  [:and
+   [:map {:closed true}
+    [:app/config [:map]]
+    [:app/repo {:doc "nil while the user picks one"} [:maybe Repo]]
+    [:app/log-gen {:doc "Bumped per load, across repos; stale results are dropped"} :int]
+    [:app/show-files? :boolean]
+    [:app/split? :boolean]
+    [:app/split-ratio number?]
+    [:app/diff-tool :keyword]
+    [:app/mode [:maybe Mode]]
+    [:app/message [:maybe Message]]
+    [:app/busy {:doc "Label of the running background command"} [:maybe :string]]
+    [:app/width :int]
+    [:app/height :int]
+    [:app/dark? :boolean]
+    [:app/dark-known {:optional true :doc "dark? carried across restarts"} [:maybe :boolean]]
+    [:app/exec [:maybe Exec]]]
+   [:fn {:error/message "no repo is open only while choosing one"}
+    #(or (:app/repo %) (= :no-repo (get-in % [:app/mode :mode/type])))]])
 
 ;; ---------------------------------------------------------------------------
 ;; Log
 
-(defn rows [state] (get-in state [:app/log :log/rows]))
-(defn entries [state] (get-in state [:app/log :log/entries]))
+(defn rows [state] (get-in state [:app/repo :repo/log :log/rows]))
+(defn entries [state] (get-in state [:app/repo :repo/log :log/entries]))
 
 (defn row-entry [state row]
   (get (entries state) (:row/entry row)))
@@ -169,13 +196,13 @@
    was."
   [state]
   (let [rs (rows state)
-        {:change/keys [id] :as cursor} (:app/cursor state)
+        {:change/keys [id] :as cursor} (get-in state [:app/repo :repo/cursor])
         find-row (fn [c] (first (keep-indexed (fn [i row] (when (row-matches? state row c) i)) rs)))]
     (or (when cursor (find-row cursor))
         (when id (find-row {:change/id id :file/path nil}))
         (let [idxs (selectable-indices state)]
           (when (seq idxs)
-            (or (first (filter #(>= % (:app/cursor-row state)) idxs))
+            (or (first (filter #(>= % (get-in state [:app/repo :repo/cursor-row])) idxs))
                 (peek idxs)))))))
 
 (defn cursor-row [state]

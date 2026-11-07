@@ -9,6 +9,7 @@
    [jjtui.log :as log]
    [jjtui.log-test :refer [file-line marker]]
    [jjtui.state :as st]
+   [jjtui.view :as view]
    [malli.core :as m]
    [malli.error :as me]))
 
@@ -16,7 +17,7 @@
   (str/join "\n"
             [(str "@  " (marker {:id "wwww" :commit "cw" :parents ["cb"] :wc? true}) "wwww")
              "│  (no description set)"
-             (str "○  " (marker {:id "bbbb" :commit "cb" :parents ["ca"] :description "B" :bookmarks ["feat"]}) "bbbb")
+             (str "○  " (marker {:id "bbbb" :commit "cb" :parents ["ca"] :description "B" :bookmarks ["feat"] :conflict? true}) "bbbb")
              "│  B"
              (file-line "│  " "modified" "b.clj")
              (str "○  " (marker {:id "aaaa" :commit "ca" :parents ["cm"] :description "A"}) "aaaa")
@@ -45,7 +46,8 @@
 (defn- loaded
   "A state with the sample log loaded, cursor on the working copy."
   []
-  (let [s (checked st/State (assoc (app/init-state {:dir "/repo" :config config/defaults :base-template "t"})
+  (let [s (checked st/State (assoc (app/init-state {:config config/defaults
+                                                    :repo {:repo/dir "/repo" :repo/base-template "t"}})
                                    :app/width 100 :app/height 30))
         [s [fx]] (app/start s)]
     (first (step s (loaded-msg (:fx/gen fx) log-output)))))
@@ -71,7 +73,7 @@
     (testing "j visits file rows, which belong to their change"
       (let [[s] (press s "j" "j")]
         (is (= "bbbb" (cursor-id s)))
-        (is (= "b.clj" (get-in s [:app/cursor :file/path])))))
+        (is (= "b.clj" (get-in s [:app/repo :repo/cursor :file/path])))))
     (testing "G and g jump to the ends"
       (is (= "mmmm" (cursor-id (first (press s "G")))))
       (is (= "wwww" (cursor-id (first (press s "G" "g"))))))))
@@ -84,20 +86,20 @@
     (is (= "bbbb" (cursor-id s)))
     (testing "results of an older load are dropped"
       (let [[s2] (step s (loaded-msg 3 ""))]
-        (is (= (:app/log s) (:app/log s2)))))))
+        (is (= (get-in s [:app/repo :repo/log]) (get-in s2 [:app/repo :repo/log])))))))
 
 (deftest marks-test
   (let [[s] (press (loaded) "m")]
-    (is (= #{"wwww"} (:app/marks s)))
+    (is (= #{"wwww"} (get-in s [:app/repo :repo/marks])))
     (is (= "bbbb" (cursor-id s)) "marking moves to the next change")
-    (is (nil? (get-in s [:app/cursor :file/path])) "skipping its files")
+    (is (nil? (get-in s [:app/repo :repo/cursor :file/path])) "skipping its files")
     (let [[s] (press s "m")]
-      (is (= #{"wwww" "bbbb"} (:app/marks s)))
+      (is (= #{"wwww" "bbbb"} (get-in s [:app/repo :repo/marks])))
       (testing "batch actions use the marks"
         (let [[_ fx] (press s "n")]
           (is (= ["new" "wwww" "bbbb"] (jj-args fx)))))
       (testing "esc clears"
-        (is (empty? (:app/marks (first (press s "escape")))))))))
+        (is (empty? (get-in (first (press s "escape")) [:app/repo :repo/marks])))))))
 
 (deftest rebase-pick-test
   (let [[s] (press (loaded) "r")]
@@ -143,7 +145,7 @@
       (is (= :all (get-in (first fx) [:fx/params :files])))))
   (testing "tab expands just the cursor's change"
     (let [[s fx] (press (loaded) (msg/key-press :tab))]
-      (is (= #{"wwww"} (:app/expanded s)))
+      (is (= #{"wwww"} (get-in s [:app/repo :repo/expanded])))
       (is (= "change_id(wwww)" (get-in (first fx) [:fx/params :files]))))))
 
 (deftest diff-test
@@ -161,6 +163,40 @@
       (is (nil? (:app/exec s)))
       (is (= :resolve-diff (:fx/type (first fx))))
       (is (= "heads(cw | cb)" (get-in (first fx) [:fx/target :target/to-rev]))))))
+
+(deftest resolve-test
+  (testing "a change without conflicts never suspends the TUI"
+    (let [[s fx] (press (loaded) "M")]
+      (is (empty? fx))
+      (is (nil? (:app/exec s)))
+      (is (= :error (get-in s [:app/message :message/level])))))
+  (testing "a conflicted change runs jj resolve on all its conflicts"
+    (let [[s fx] (press (loaded) "j" "M")]
+      (is (= [{:fx/type :quit}] fx))
+      (is (= ["jj" "resolve" "-r" "bbbb"] (get-in s [:app/exec :exec/argv])))))
+  (testing "on a file row only that file, honoring --ignore-immutable"
+    (let [[s] (press (loaded) "!" "j" "j" "M")]
+      (is (= ["jj" "resolve" "-r" "bbbb" "b.clj" "--ignore-immutable"] (get-in s [:app/exec :exec/argv]))))))
+
+(defn- help-text [s] (str/join "\n" (map #(str/replace % #"\u001b\[[0-9;]*m" "") (str/split-lines (view/render s)))))
+
+(deftest help-search-test
+  (let [[s] (press (loaded) "?" "/" "p" "u" "s" "h")]
+    (testing "typing filters the bindings, matching group titles too"
+      (is (str/includes? (help-text s) "Push new (-c)"))
+      (is (not (str/includes? (help-text s) "Rebase"))))
+    (testing "letters go to the search, not to the help keys"
+      (is (= :help (get-in (first (press s "q")) [:app/mode :mode/type]))))
+    (testing "enter keeps the filter; then esc clears it before closing"
+      (let [[s] (press s "enter")]
+        (is (str/includes? (help-text s) "Push new (-c)"))
+        (is (= :help (get-in (first (press s "j")) [:app/mode :mode/type])) "j scrolls again")
+        (let [[s] (press s "escape")]
+          (is (= :help (get-in s [:app/mode :mode/type])))
+          (is (str/includes? (help-text s) "Rebase"))
+          (is (nil? (:app/mode (first (press s "escape"))))))))
+    (testing "a query matching nothing says so"
+      (is (str/includes? (help-text (first (press s "z" "z" "z"))) "no matching keys")))))
 
 (defn- bookmark [bname remote]
   {:bookmark/name bname
@@ -185,11 +221,50 @@
 
 (deftest revset-error-test
   (let [[s fx] (press (loaded) "L" "x" "(" "enter")]
-    (is (= "x(" (:app/revset s)))
+    (is (= "x(" (get-in s [:app/repo :repo/revset])))
     (let [[s fx] (step s {:type :msg/log-loaded :msg/gen (:fx/gen (first fx)) :msg/result {:jj/error "bad revset"}})]
-      (is (nil? (:app/revset s)) "falls back to the last revset that worked")
+      (is (nil? (get-in s [:app/repo :repo/revset])) "falls back to the last revset that worked")
       (is (= :error (get-in s [:app/message :message/level])))
       (is (nil? (get-in (first fx) [:fx/params :revset]))))))
+
+(defn- choosing
+  "The chooser for /work/lib, a git repo inside the jj repo /work, with one
+   recent repo."
+  []
+  (let [now 1000000000]
+    (checked st/State
+             (app/init-state {:config config/defaults
+                              :mode (app/chooser {:git-root "/work/lib"
+                                                  :parent "/work"
+                                                  :recent [{:visit/dir "/code/other" :visit/count 3 :visit/last (- now 7200000)}]
+                                                  :now now})}))))
+
+(deftest chooser-test
+  (let [s (choosing)]
+    (is (= [["i" [:init "/work/lib"]] ["p" [:open "/work"]] ["1" [:open "/code/other"]]]
+           (map (juxt :choice/key :choice/action) (get-in s [:app/mode :mode/choices]))))
+    (is (= "3 visits · 2h ago" (get-in s [:app/mode :mode/choices 2 :choice/detail])))
+    (testing "a hotkey or j + enter picks a choice"
+      (is (= [{:fx/type :init-repo :fx/dir "/work/lib"}] (second (press s "i"))))
+      (is (= [{:fx/type :open-repo :fx/dir "/work"}] (second (press s "j" "enter"))))
+      (is (= [{:fx/type :open-repo :fx/dir "/code/other"}] (second (press s "1")))))
+    (testing "one choice at a time"
+      (is (empty? (second (press s "i" "p")))))
+    (testing "q quits"
+      (is (= [{:fx/type :quit}] (second (press s "q")))))
+    (testing "a repo that fails to open leaves the chooser up with the error"
+      (let [[s] (press s "p" {:type :msg/repo-opened :msg/result {:jj/error "No jj repo at /work"}})]
+        (is (= :no-repo (get-in s [:app/mode :mode/type])))
+        (is (nil? (:app/busy s)))
+        (is (= "No jj repo at /work" (get-in s [:app/message :message/text])))))
+    (testing "an opened repo replaces the chooser and loads its log"
+      (let [[s fx] (press s "p" {:type :msg/repo-opened
+                                 :msg/result {:repo/dir "/work" :repo/base-template "t"}})]
+        (is (nil? (:app/mode s)))
+        (is (= "/work" (get-in s [:app/repo :repo/dir])))
+        (is (= [:load-log] (map :fx/type fx)))
+        (let [[s] (step s (loaded-msg (:fx/gen (first fx)) log-output))]
+          (is (= "wwww" (cursor-id s))))))))
 
 (deftest fuzzy-score-test
   (is (some? (st/fuzzy-score "fl" "feature/login")))

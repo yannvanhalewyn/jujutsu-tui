@@ -11,6 +11,7 @@
    [clojure.string :as str]
    [jjtui.jj :as jj]
    [jjtui.log :as log]
+   [jjtui.repo :as repo]
    [jjtui.state :as st]))
 
 ;; ---------------------------------------------------------------------------
@@ -44,6 +45,9 @@
    [:msg/diff-resolved [:map
                         [:type [:= :msg/diff-resolved]]
                         [:msg/result [:or st/DiffTarget jj/Failure]]]]
+   [:msg/repo-opened [:map
+                      [:type [:= :msg/repo-opened]]
+                      [:msg/result [:or repo/Opened jj/Failure]]]]
    [:msg/preview-fetch [:map
                         [:type [:= :msg/preview-fetch]]
                         [:msg/key st/PreviewKey]]]
@@ -67,7 +71,9 @@
    [:bookmarks [:map [:fx/type [:= :bookmarks]] [:fx/purpose BookmarkPurpose]]]
    [:resolve-diff [:map [:fx/type [:= :resolve-diff]] [:fx/target st/DiffTarget]]]
    [:debounce [:map [:fx/type [:= :debounce]] [:fx/ms :int] [:fx/msg Msg]]]
-   [:preview [:map [:fx/type [:= :preview]] [:fx/key st/PreviewKey]]]])
+   [:preview [:map [:fx/type [:= :preview]] [:fx/key st/PreviewKey]]]
+   [:open-repo [:map [:fx/type [:= :open-repo]] [:fx/dir :string]]]
+   [:init-repo {:doc "jj git init --colocate, then open"} [:map [:fx/type [:= :init-repo]] [:fx/dir :string]]]])
 
 ;; ---------------------------------------------------------------------------
 ;; Running effects
@@ -108,7 +114,8 @@
       :else (assoc target :target/from-sha (:jj/id from) :target/to-sha (first (:jj/ids to))))))
 
 (defn- effect->cmd [state effect]
-  (let [dir (:app/dir state)]
+  (let [dir (get-in state [:app/repo :repo/dir])
+        log-template (get-in state [:app/config :log-template])]
     (case (:fx/type effect)
       :quit program/quit-cmd
 
@@ -138,7 +145,15 @@
       (program/cmd #(let [[argv width :as k] (:fx/key effect)]
                       {:type :msg/preview-loaded
                        :msg/key k
-                       :msg/lines (run-preview dir argv width)})))))
+                       :msg/lines (run-preview dir argv width)}))
+
+      :open-repo
+      (program/cmd #(hash-map :type :msg/repo-opened
+                              :msg/result (repo/open (:fx/dir effect) log-template)))
+
+      :init-repo
+      (program/cmd #(hash-map :type :msg/repo-opened
+                              :msg/result (repo/init-colocated (:fx/dir effect) log-template))))))
 
 (defn ->cmd
   "One charm command for a list of effects. Quitting wins over everything

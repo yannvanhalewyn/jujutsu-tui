@@ -15,4 +15,9 @@
   demo-repo {:doc "Create a throwaway jj repo to try jjtui in (default /tmp/jjtui-demo)"
              :extra-paths ["dev"]
              :requires ([jjtui.demo :as demo])
-             :task (println "Created" (demo/create! (or (first *command-line-args*) "/tmp/jjtui-demo")))}}}
+             :task (println "Created" (demo/create! (or (first *command-line-args*) "/tmp/jjtui-demo")))}
+
+  demo-conflict-repo {:doc "Create a throwaway jj repo with a conflicted rebase (default /tmp/jjtui-conflict-demo)"
+                      :extra-paths ["dev"]
+                      :requires ([jjtui.demo-conflict :as demo])
+                      :task (println "Created" (demo/create! (or (first *command-line-args*) "/tmp/jjtui-conflict-demo")))}}}

@@ -5,7 +5,7 @@
    [babashka.fs :as fs]
    [babashka.process :as p]))
 
-(defn- jj [dir & args]
+(defn jj [dir & args]
   (-> (p/process (into ["jj" "--no-pager"] args)
                  {:dir (str dir)
                   :out :string
@@ -16,7 +16,7 @@
       p/check
       :out))
 
-(defn- write! [dir path content]
+(defn write! [dir path content]
   (let [f (fs/file dir path)]
     (fs/create-dirs (fs/parent f))
     (spit f content)))
@@ -25,7 +25,7 @@
   "Creates the demo repo at `dir` (plus a bare origin next to it), replacing
    whatever is there. Returns dir."
   [dir]
-  (let [origin (str dir "-origin.git")]
+  (let [origin (str (fs/normalize (fs/absolutize dir)) "-origin.git")]
     (fs/delete-tree dir)
     (fs/delete-tree origin)
     (fs/create-dirs dir)

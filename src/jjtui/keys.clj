@@ -55,6 +55,7 @@
      [["S"] :squash-into "Squash into… (pick)"]
      [["r"] :rebase "Rebase (pick destination)"]
      [["X"] :split-change "Split (interactive)"]
+     [["M"] :resolve "Resolve conflicts (merge tool)"]
      [["u"] :undo "Undo"]
      [["U"] :redo "Redo"]
      [["!"] :toggle-ignore-immutable "Toggle --ignore-immutable"]]]

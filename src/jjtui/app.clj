@@ -17,35 +17,50 @@
 ;; ---------------------------------------------------------------------------
 ;; State
 
+(defn repo-state
+  "A freshly opened repo (a jjtui.repo/Opened), before its log has loaded.
+   Switching repos replaces this wholesale and reloads."
+  [config {:repo/keys [dir base-template]}]
+  {:repo/dir dir
+   :repo/base-template base-template
+   :repo/revset (:revset config)
+   :repo/good-revset (:revset config)
+   :repo/log {:log/entries [] :log/rows []}
+   :repo/loading? true
+   :repo/cursor nil
+   :repo/cursor-row 0
+   :repo/offset 0
+   :repo/marks #{}
+   :repo/expanded #{}
+   :repo/preview nil
+   :repo/preview-cache {}
+   :repo/ignore-immutable? false})
+
 (defn init-state
-  [{:keys [dir config revset base-template config-error]}]
-  {:app/dir dir
-   :app/config config
-   :app/base-template base-template
-   :app/revset (or revset (:revset config))
-   :app/good-revset (or revset (:revset config))
-   :app/log {:log/entries [] :log/rows []}
+  "`repo` is the jjtui.repo/Opened to start in, or nil with `mode` the repo
+   chooser."
+  [{:keys [config config-error repo mode]}]
+  {:app/config config
+   :app/repo (some->> repo (repo-state config))
    :app/log-gen 0
-   :app/loading? true
-   :app/cursor nil
-   :app/cursor-row 0
-   :app/offset 0
-   :app/marks #{}
-   :app/expanded #{}
    :app/show-files? (boolean (:show-files config))
    :app/split? (boolean (:split config))
    :app/split-ratio (:split-ratio config)
-   :app/preview nil
-   :app/preview-cache {}
-   :app/ignore-immutable? false
    :app/diff-tool (:diff-tool config)
-   :app/mode nil
+   :app/mode mode
    :app/message (when config-error {:message/text config-error :message/level :error})
    :app/busy nil
    :app/width 80
    :app/height 24
    :app/dark? true
    :app/exec nil})
+
+(defn- update-repo
+  "Updates the open repo; a no-op while none is open."
+  [state f & args]
+  (if (:app/repo state)
+    (apply update state :app/repo f args)
+    state))
 
 (defn- message [state text level]
   (assoc state :app/message {:message/text text :message/level level}))
@@ -58,7 +73,7 @@
 
 (defn- set-cursor-index [state i]
   (if-let [row (get (rows state) i)]
-    (assoc state :app/cursor (row-cursor state row) :app/cursor-row i)
+    (update-repo state assoc :repo/cursor (row-cursor state row) :repo/cursor-row i)
     state))
 
 (defn- move-cursor [state delta]
@@ -96,19 +111,20 @@
           j)))))
 
 (defn scroll-into-view
-  "Adjusts :app/offset so the cursor's change is visible, keeping a small margin."
+  "Adjusts the repo's offset so the cursor's change is visible, keeping a
+   small margin."
   [state]
   (let [h (log-height state)
         rs (rows state)
         idx (cursor-index state)]
     (if (or (nil? idx) (empty? rs))
-      (assoc state :app/offset 0)
+      (assoc-in state [:app/repo :repo/offset] 0)
       (let [hi (min (block-end rs idx) (+ idx h -1))
             margin (min 2 (quot (dec h) 4))
-            off (:app/offset state)
+            off (get-in state [:app/repo :repo/offset])
             off (if (> (+ hi margin) (+ off h -1)) (- (+ hi margin) (dec h)) off)
             off (if (< (- idx margin) off) (- idx margin) off)]
-        (assoc state :app/offset (max 0 (min off (- (count rs) h))))))))
+        (assoc-in state [:app/repo :repo/offset] (max 0 (min off (- (count rs) h))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Selection
@@ -116,7 +132,7 @@
 (defn marked-entries
   "Marked changes in log order (newest first)."
   [state]
-  (filter #(contains? (:app/marks state) (:change/id %)) (entries state)))
+  (filter #(contains? (get-in state [:app/repo :repo/marks]) (:change/id %)) (entries state)))
 
 (defn- targets
   "The changes an action applies to: the marks, else the cursor's change."
@@ -135,24 +151,24 @@
   (not (str/blank? (:change/description entry))))
 
 (defn- ignore-immutable [state args]
-  (cond-> args (:app/ignore-immutable? state) (conj "--ignore-immutable")))
+  (cond-> args (get-in state [:app/repo :repo/ignore-immutable?]) (conj "--ignore-immutable")))
 
 ;; ---------------------------------------------------------------------------
 ;; Effects
 
-(defn- log-params [state]
-  {:revset (:app/revset state)
-   :base-template (:app/base-template state)
+(defn- log-params [{:app/keys [repo] :as state}]
+  {:revset (:repo/revset repo)
+   :base-template (:repo/base-template repo)
    :files (cond
             (:app/show-files? state) :all
-            (seq (:app/expanded state)) (log/files-revset (:app/expanded state))
+            (seq (:repo/expanded repo)) (log/files-revset (:repo/expanded repo))
             :else nil)})
 
 (defn reload
   "State and effect for reloading the log."
   [state]
   (let [gen (inc (:app/log-gen state))]
-    [(assoc state :app/log-gen gen :app/loading? true)
+    [(-> (assoc state :app/log-gen gen) (update-repo assoc :repo/loading? true))
      [{:fx/type :load-log :fx/gen gen :fx/params (log-params state)}]]))
 
 (defn- run-jj
@@ -167,7 +183,7 @@
   "Suspends the TUI to run `argv` in the terminal."
   [state argv & {:keys [wait? reload? clear-marks?] :or {reload? true}}]
   [(cond-> (assoc state :app/exec {:exec/argv argv :exec/wait? wait? :exec/reload? reload?})
-     clear-marks? (assoc :app/marks #{}))
+     clear-marks? (update-repo assoc :repo/marks #{}))
    [{:fx/type :quit}]])
 
 ;; ---------------------------------------------------------------------------
@@ -216,7 +232,7 @@
    "from-sha" (:target/from-sha target)
    "to-sha" (:target/to-sha target)
    "width" (str (:app/width state))
-   "repo" (:app/dir state)})
+   "repo" (get-in state [:app/repo :repo/dir])})
 
 (defn- open-diff
   "Opens `target` in the active diff tool, first asking jj for the commit ids
@@ -261,31 +277,31 @@
    after a short debounce so holding j doesn't run jj for every row."
   [[state fx]]
   (let [k (preview-key state)
-        current (get-in state [:app/preview :preview/key])]
+        current (get-in state [:app/repo :repo/preview :preview/key])]
     (cond
       (or (nil? k) (= k current)) [state fx]
 
-      (contains? (:app/preview-cache state) k)
-      [(assoc state :app/preview {:preview/key k
-                                  :preview/lines (get-in state [:app/preview-cache k])
-                                  :preview/offset 0})
+      (contains? (get-in state [:app/repo :repo/preview-cache]) k)
+      [(assoc-in state [:app/repo :repo/preview] {:preview/key k
+                                                   :preview/lines (get-in state [:app/repo :repo/preview-cache k])
+                                                   :preview/offset 0})
        fx]
 
       :else
-      [(assoc state :app/preview {:preview/key k
-                                  :preview/lines (get-in state [:app/preview :preview/lines])
-                                  :preview/offset 0
-                                  :preview/loading? true})
+      [(assoc-in state [:app/repo :repo/preview] {:preview/key k
+                                                   :preview/lines (get-in state [:app/repo :repo/preview :preview/lines])
+                                                   :preview/offset 0
+                                                   :preview/loading? true})
        (conj (vec fx) {:fx/type :debounce
                        :fx/ms 60
                        :fx/msg {:type :msg/preview-fetch :msg/key k}})])))
 
 (defn- scroll-preview [state delta]
-  (if-not (and (:app/split? state) (:app/preview state))
+  (if-not (and (:app/split? state) (get-in state [:app/repo :repo/preview]))
     state
-    (let [n (count (get-in state [:app/preview :preview/lines]))
+    (let [n (count (get-in state [:app/repo :repo/preview :preview/lines]))
           h (log-height state)]
-      (update-in state [:app/preview :preview/offset]
+      (update-in state [:app/repo :repo/preview :preview/offset]
                  #(max 0 (min (+ (or % 0) delta) (- n h)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -387,16 +403,16 @@
 (defn- clear-cursor-file
   "Moves the cursor from a file row to its change."
   [state]
-  (update state :app/cursor #(some-> % (assoc :file/path nil))))
+  (update-repo state update :repo/cursor #(some-> % (assoc :file/path nil))))
 
 (defn- toggle-files [state]
   (if-let [entry (cursor-entry state)]
     (let [id (:change/id entry)
           state (if (:app/show-files? state)
                   ;; Collapsing one change out of "all": expand all the others
-                  (assoc state :app/show-files? false
-                         :app/expanded (disj (set (ids (entries state))) id))
-                  (update state :app/expanded #(if (contains? % id) (disj % id) (conj % id))))]
+                  (-> (assoc state :app/show-files? false)
+                      (assoc-in [:app/repo :repo/expanded] (disj (set (ids (entries state))) id)))
+                  (update-in state [:app/repo :repo/expanded] #(if (contains? % id) (disj % id) (conj % id))))]
       (reload (clear-cursor-file state)))
     [state []]))
 
@@ -415,16 +431,18 @@
     :cursor/half-up [(move-rows state (- (max 1 (quot (log-height state) 2)))) []]
     :cursor/working-copy
     (if-let [wc (first (filter :change/working-copy? (entries state)))]
-      [(assoc state :app/cursor (change-cursor wc)) []]
+      [(assoc-in state [:app/repo :repo/cursor] (change-cursor wc)) []]
       [(error state "The working copy is not in this revset") []])
     :refresh (reload state)
-    :help [(assoc state :app/mode {:mode/type :help :mode/offset 0}) []]
+    :help [(assoc state :app/mode {:mode/type :help :mode/offset 0
+                                   :mode/search (ti/text-input :prompt "/" :focused false)})
+           []]
     :quit [state [{:fx/type :quit}]]
 
     :files/toggle (toggle-files state)
     :files/toggle-all (reload (-> state
                                   (update :app/show-files? not)
-                                  (assoc :app/expanded #{})
+                                  (assoc-in [:app/repo :repo/expanded] #{})
                                   (clear-cursor-file)))
     :split/toggle [(update state :app/split? not) []]
     :preview/down [(scroll-preview (ensure-split state) 3) []]
@@ -433,7 +451,7 @@
     :preview/page-up [(scroll-preview (ensure-split state) (- (log-height state))) []]
     :split/shrink [(update state :app/split-ratio #(max 0.2 (- % 0.05))) []]
     :split/grow [(update state :app/split-ratio #(min 0.8 (+ % 0.05))) []]
-    :revset/set [(open-input state :revset "Log revset (empty for default)" (:app/revset state) "revset › ") []]
+    :revset/set [(open-input state :revset "Log revset (empty for default)" (get-in state [:app/repo :repo/revset]) "revset › ") []]
 
     :diff/open (if-let [target (diff-target state)]
                  (open-diff state target)
@@ -449,7 +467,7 @@
     :mark/toggle
     (if-let [entry (cursor-entry state)]
       (let [id (:change/id entry)
-            state (update state :app/marks #(if (contains? % id) (disj % id) (conj % id)))]
+            state (update-in state [:app/repo :repo/marks] #(if (contains? % id) (disj % id) (conj % id)))]
         ;; Step to the next change, skipping its files
         [(if-let [next-node (first (filter #(= :node (:row/kind (get (rows state) %)))
                                            (range (inc (or (cursor-index state) 0)) (count (rows state)))))]
@@ -457,8 +475,8 @@
            state)
          []])
       [state []])
-    :mark/clear [(cond-> (assoc state :app/marks #{})
-                   (seq (:app/marks state)) (info "Cleared marks"))
+    :mark/clear [(cond-> (assoc-in state [:app/repo :repo/marks] #{})
+                   (seq (get-in state [:app/repo :repo/marks])) (info "Cleared marks"))
                  []]
 
     :describe (with-entry state #(run-exec state (ignore-immutable state ["jj" "describe" "-r" (:change/id %)])))
@@ -502,11 +520,18 @@
     :squash-into (start-pick state :squash-into (targets state))
     :rebase (start-pick state :rebase (targets state))
     :split-change (with-entry state #(run-exec state (ignore-immutable state ["jj" "split" "-r" (:change/id %)])))
+    :resolve (with-entry state
+               (fn [entry]
+                 (if (:change/conflict? entry)
+                   (let [path (get-in (cursor-row state) [:row/file :file/path])]
+                     (run-exec state (ignore-immutable state (cond-> ["jj" "resolve" "-r" (:change/id entry)]
+                                                               path (conj path)))))
+                   [(error state (str (:change/short-id entry) " has no conflicts")) []])))
     :undo (run-jj state ["undo"] {:label "Undoing"})
     :redo (run-jj state ["redo"] {:label "Redoing"})
     :toggle-ignore-immutable
-    (let [state (update state :app/ignore-immutable? not)]
-      [(info state (if (:app/ignore-immutable? state) "--ignore-immutable on" "--ignore-immutable off")) []])
+    (let [state (update-in state [:app/repo :repo/ignore-immutable?] not)]
+      [(info state (if (get-in state [:app/repo :repo/ignore-immutable?]) "--ignore-immutable on" "--ignore-immutable off")) []])
 
     :bookmark/set (if (cursor-entry state)
                     [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :bookmark-set}]]
@@ -587,11 +612,74 @@
   (let [value (str/trim (ti/value input))
         state (assoc state :app/mode nil)]
     (case purpose
-      :revset (reload (assoc state :app/revset (not-empty value) :app/marks #{}))
+      :revset (reload (update-repo state assoc :repo/revset (not-empty value) :repo/marks #{}))
       :rename (if (or (str/blank? value) (= value bookmark))
                 [state []]
                 (run-jj state ["bookmark" "rename" bookmark value]
                         {:label "Renaming bookmark" :success (str "Renamed " bookmark " to " value)})))))
+
+;; ---------------------------------------------------------------------------
+;; Repo chooser
+
+(defn- ago [ms]
+  (let [minutes (quot ms 60000)]
+    (cond
+      (< minutes 1) "just now"
+      (< minutes 60) (str minutes "m ago")
+      (< minutes (* 60 24)) (str (quot minutes 60) "h ago")
+      :else (str (quot minutes (* 60 24)) "d ago"))))
+
+(defn chooser
+  "The repo chooser for a git repo without jj: set jj up in it, open the jj
+   repo it sits in (`parent`), or one of the `recent` repos
+   (jjtui.history/suggestions)."
+  [{:keys [git-root parent recent now]}]
+  {:mode/type :no-repo
+   :mode/git-root git-root
+   :mode/selected 0
+   :mode/choices
+   (into (cond-> [{:choice/key "i"
+                   :choice/label "Set up jj in this git repo"
+                   :choice/detail (str "jj git init --colocate in " git-root)
+                   :choice/action [:init git-root]}]
+           parent (conj {:choice/key "p"
+                         :choice/label "Open the jj repo it's inside"
+                         :choice/detail parent
+                         :choice/action [:open parent]}))
+         (map-indexed (fn [i {dir :visit/dir n :visit/count last-ms :visit/last}]
+                        {:choice/key (str (inc i))
+                         :choice/label dir
+                         :choice/detail (str n (if (= 1 n) " visit · " " visits · ") (ago (- now last-ms)))
+                         :choice/action [:open dir]}))
+         (take 9 recent))})
+
+(defn- choose [state {[op dir] :choice/action}]
+  (if (:app/busy state)
+    [state []]
+    [(assoc state :app/busy (if (= :init op) (str "Setting up jj in " dir) (str "Opening " dir)))
+     [{:fx/type (if (= :init op) :init-repo :open-repo) :fx/dir dir}]]))
+
+(defn- handle-chooser-key [state k]
+  (let [{:mode/keys [choices selected]} (:app/mode state)
+        clamp #(max 0 (min % (dec (count choices))))]
+    (cond
+      (#{"q" "escape"} k) [state [{:fx/type :quit}]]
+      (#{"j" "down"} k) [(assoc-in state [:app/mode :mode/selected] (clamp (inc selected))) []]
+      (#{"k" "up"} k) [(assoc-in state [:app/mode :mode/selected] (clamp (dec selected))) []]
+      (= "enter" k) (choose state (get choices selected))
+      :else (if-let [choice (first (filter #(= k (:choice/key %)) choices))]
+              (choose state choice)
+              [state []]))))
+
+(defn- repo-opened
+  "Switches to the opened repo: its state starts fresh and its log loads."
+  [state {:msg/keys [result]}]
+  (let [state (assoc state :app/busy nil)]
+    (if-let [err (:jj/error result)]
+      [(error state err) []]
+      (reload (-> state
+                  (assoc :app/repo (repo-state (:app/config state) result) :app/mode nil)
+                  (info (str "Opened " (:repo/dir result))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Keys per mode
@@ -639,15 +727,33 @@
       flag [(update-in state [:app/mode :mode/flags] #(if (contains? % flag) (disj % flag) (conj % flag))) []]
       :else (menu-choice state mode option))))
 
+(defn- handle-help-key [state k msg]
+  (let [search (get-in state [:app/mode :mode/search])
+        set-search #(update state :app/mode assoc :mode/search % :mode/offset 0)
+        scroll #(update-in state [:app/mode :mode/offset] (fn [o] (max 0 (+ o %))))]
+    (cond
+      (#{"down" "ctrl+n"} k) [(scroll 1) []]
+      (#{"up" "ctrl+p"} k) [(scroll -1) []]
+
+      (ti/focused? search)
+      (case k
+        "escape" [(set-search (ti/blur (ti/reset search))) []]
+        "enter" [(set-search (ti/blur search)) []]
+        [(set-search (first (ti/text-input-update search msg))) []])
+
+      (= "/" k) [(set-search (ti/focus search)) []]
+      (and (= "escape" k) (seq (ti/value search))) [(set-search (ti/reset search)) []]
+      (#{"escape" "q" "?"} k) [(assoc state :app/mode nil) []]
+      (= "j" k) [(scroll 1) []]
+      (= "k" k) [(scroll -1) []]
+      :else [state []])))
+
 (defn- handle-key [state k msg]
   (let [state (assoc state :app/message nil)
         mode (:app/mode state)]
     (case (:mode/type mode)
-      :help (cond
-              (#{"escape" "q" "?"} k) [(assoc state :app/mode nil) []]
-              (#{"j" "down"} k) [(update-in state [:app/mode :mode/offset] inc) []]
-              (#{"k" "up"} k) [(update-in state [:app/mode :mode/offset] #(max 0 (dec %))) []]
-              :else [state []])
+      :no-repo (handle-chooser-key state k)
+      :help (handle-help-key state k msg)
       :pick (handle-pick-key state k)
       :picker (handle-picker-key state k msg)
       :menu (handle-menu-key state k)
@@ -675,22 +781,23 @@
     (not= gen (:app/log-gen state)) [state []]
 
     (:jj/error result)
-    (let [state (-> state (assoc :app/loading? false) (error (:jj/error result)))]
-      (if (not= (:app/revset state) (:app/good-revset state))
+    (let [state (-> state (update-repo assoc :repo/loading? false) (error (:jj/error result)))
+          {:repo/keys [revset good-revset]} (:app/repo state)]
+      (if (not= revset good-revset)
         ;; The new revset failed: go back to the last one that worked
-        (reload (assoc state :app/revset (:app/good-revset state)))
+        (reload (update-repo state assoc :repo/revset good-revset))
         [state []]))
 
     :else
     (let [loaded (set (ids (:log/entries result)))
-          first-load? (and (nil? (:app/cursor state)) (empty? (entries state)))
-          state (-> state
-                    (assoc :app/log result :app/loading? false :app/good-revset (:app/revset state))
-                    (update :app/marks #(into #{} (filter loaded) %))
-                    (update :app/expanded #(into #{} (filter loaded) %)))]
+          first-load? (and (nil? (get-in state [:app/repo :repo/cursor])) (empty? (entries state)))
+          state (update-repo state #(-> %
+                                        (assoc :repo/log result :repo/loading? false :repo/good-revset (:repo/revset %))
+                                        (update :repo/marks (fn [ms] (into #{} (filter loaded) ms)))
+                                        (update :repo/expanded (fn [es] (into #{} (filter loaded) es)))))]
       [(if first-load?
          (if-let [wc (first (filter :change/working-copy? (:log/entries result)))]
-           (assoc state :app/cursor (change-cursor wc))
+           (assoc-in state [:app/repo :repo/cursor] (change-cursor wc))
            (set-cursor-index state (first (selectable-indices state))))
          state)
        []])))
@@ -704,7 +811,7 @@
                 (not ok?) (error state (str/trim (str err)))
                 success (info state success)
                 :else (info state (or (first-line err) (first-line out) "Done")))
-        state (cond-> state (and ok? clear-marks?) (assoc :app/marks #{}))]
+        state (cond-> state (and ok? clear-marks?) (update-repo assoc :repo/marks #{}))]
     (reload state)))
 
 (defn- bookmarks-loaded [state {:msg/keys [purpose result]}]
@@ -723,7 +830,8 @@
   "Called by the main loop once an interactive command finished."
   [state {:keys [exit]}]
   (let [reload? (get-in state [:app/exec :exec/reload?])
-        state (assoc state :app/exec nil :app/preview-cache {} :app/preview nil)
+        state (-> (assoc state :app/exec nil)
+                  (update-repo assoc :repo/preview-cache {} :repo/preview nil))
         state (if (and exit (not (zero? exit)))
                 (error state (str "Command exited with " exit))
                 state)]
@@ -744,26 +852,29 @@
           :msg/log-loaded (log-loaded state msg)
           :msg/jj-done (jj-done state msg)
           :msg/bookmarks-loaded (bookmarks-loaded state msg)
+          :msg/repo-opened (repo-opened state msg)
           :msg/diff-resolved (let [result (:msg/result msg)]
                                (if-let [err (:jj/error result)]
                                  [(error state err) []]
                                  (open-diff (assoc state :app/message nil) result)))
           :msg/preview-fetch (let [k (:msg/key msg)]
-                               [state (if (= k (get-in state [:app/preview :preview/key]))
+                               [state (if (= k (get-in state [:app/repo :repo/preview :preview/key]))
                                         [{:fx/type :preview :fx/key k}]
                                         [])])
           :msg/preview-loaded
           (let [{:msg/keys [key lines]} msg
-                state (update state :app/preview-cache #(assoc (if (> (count %) 64) {} %) key lines))]
-            [(if (= key (get-in state [:app/preview :preview/key]))
-               (assoc state :app/preview {:preview/key key :preview/lines lines :preview/offset 0})
+                state (update-repo state update :repo/preview-cache #(assoc (if (> (count %) 64) {} %) key lines))]
+            [(if (= key (get-in state [:app/repo :repo/preview :preview/key]))
+               (assoc-in state [:app/repo :repo/preview] {:preview/key key :preview/lines lines :preview/offset 0})
                state)
              []])
 
           [state []])]
-    (sync-preview [(scroll-into-view state) fx])))
+    (if (:app/repo state)
+      (sync-preview [(scroll-into-view state) fx])
+      [state fx])))
 
 (defn start
   "Initial [state effects] for a (re)started program."
   [state]
-  (reload state))
+  (if (:app/repo state) (reload state) [state []]))

@@ -8,11 +8,11 @@
 
 (defn marker
   "The hidden fields jj prints for a change, as the template produces them."
-  [{:keys [id commit parents wc? immutable? bookmarks description]
+  [{:keys [id commit parents wc? immutable? conflict? bookmarks description]
     :or {parents [] bookmarks []}}]
   (str "\u001d"
        (str/join "\u001f" [id (subs id 0 4) commit (str/join "," parents)
-                           (str (boolean immutable?)) "false" "false" "false" (str (boolean wc?))
+                           (str (boolean immutable?)) "false" (str (boolean conflict?)) "false" (str (boolean wc?))
                            (str/join " " bookmarks) (or description "")])
        "\u001e"))
 

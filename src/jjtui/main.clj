@@ -6,7 +6,8 @@
    [jjtui.app :as app]
    [jjtui.config :as config]
    [jjtui.effects :as effects]
-   [jjtui.jj :as jj]
+   [jjtui.history :as history]
+   [jjtui.repo :as repo]
    [jjtui.view :as view])
   (:import
    [org.jline.terminal TerminalBuilder]))
@@ -14,7 +15,8 @@
 (def usage
   "Usage: jjtui [options]
 
-Interactive TUI for jujutsu repositories. Run it inside a jj repo.
+Interactive TUI for jujutsu repositories. Run it inside a jj repo; in a git
+repo without jj it offers to set jj up, or to open another repo.
 
 Options:
   -r, --revset REVSET   Log revset (default: jj's revsets.log)
@@ -71,6 +73,29 @@ Press ? inside the TUI for keybindings.")
                 ;; Asked once; restarts reuse the answer instead of re-querying
                 :dark-background? (:app/dark-known state)}))
 
+(defn- fail! [message]
+  (binding [*out* *err*]
+    (println (str "jjtui: " message)))
+  (System/exit 1))
+
+(defn- start-state
+  "The initial state for `cwd`: its jj repo, or the repo chooser when it's in
+   a git repo without jj."
+  [cwd config config-error]
+  (let [[kind found] (repo/find-start cwd)
+        init #(app/init-state (merge {:config config :config-error config-error} %))]
+    (case kind
+      :open (let [opened (repo/open found (:log-template config))]
+              (when-let [err (:jj/error opened)] (fail! err))
+              (init {:repo opened}))
+      :choose (let [{:keys [git-root parent]} found
+                    now (System/currentTimeMillis)
+                    recent (history/suggestions (history/read-visits (history/default-path))
+                                                now
+                                                (set (remove nil? [git-root parent])))]
+                (init {:mode (app/chooser {:git-root git-root :parent parent :recent recent :now now})}))
+      (fail! "not inside a jj or git repository"))))
+
 (defn -main [& args]
   (let [opts (parse-args args)]
     (cond
@@ -84,20 +109,10 @@ Press ? inside the TUI for keybindings.")
           (System/exit 2))
 
       :else
-      (let [cwd (System/getProperty "user.dir")
-            root (jj/workspace-root cwd)]
-        (when-not root
-          (binding [*out* *err*]
-            (println "jjtui: not inside a jj repository (jj workspace root failed)"))
-          (System/exit 1))
-        (let [{:keys [config error]} (config/load-config (:config opts))]
-          (loop [step (app/start (app/init-state {:dir root
-                                                  :config config
-                                                  :config-error error
-                                                  :revset (:revset opts)
-                                                  :base-template (or (:log-template config)
-                                                                     (jj/base-template root))}))]
-            (let [state (run-program step)]
-              (when-let [exec (:app/exec state)]
-                (let [exit (run-interactive root exec)]
-                  (recur (app/after-exec (assoc state :app/dark-known (:app/dark? state)) {:exit exit})))))))))))
+      (let [{:keys [config error]} (config/load-config (:config opts))
+            config (cond-> config (:revset opts) (assoc :revset (:revset opts)))]
+        (loop [step (app/start (start-state (System/getProperty "user.dir") config error))]
+          (let [state (run-program step)]
+            (when-let [exec (:app/exec state)]
+              (let [exit (run-interactive (get-in state [:app/repo :repo/dir]) exec)]
+                (recur (app/after-exec (assoc state :app/dark-known (:app/dark? state)) {:exit exit}))))))))))

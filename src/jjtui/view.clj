@@ -140,11 +140,11 @@
         mode (:app/mode state)
         pal (palette state)
         block (if cursor-idx (block-of rows cursor-idx) #{})
-        marks (:app/marks state)
+        {:repo/keys [marks offset loading?]} (:app/repo state)
         sources (set (when (= :pick (:mode/type mode)) (:mode/sources mode)))
-        visible (take height (drop (:app/offset state) (map-indexed vector rows)))]
+        visible (take height (drop offset (map-indexed vector rows)))]
     (cond
-      (and (empty? rows) (:app/loading? state)) [(dim "  Loading…")]
+      (and (empty? rows) loading?) [(dim "  Loading…")]
       (empty? rows) [(dim "  No changes in this revset (press L to change it)")]
       :else
       (for [[i row] visible]
@@ -168,10 +168,10 @@
 ;; Diff pane
 
 (defn- preview-lines [state height width]
-  (let [{:preview/keys [lines offset loading?]} (:app/preview state)
+  (let [{:preview/keys [lines offset loading?]} (get-in state [:app/repo :repo/preview])
         entry (st/cursor-entry state)
         title (str " " (if entry (str "diff " (:change/short-id entry)) "diff")
-                   (when-let [f (get-in state [:app/cursor :file/path])] (str "  " f))
+                   (when-let [f (get-in state [:app/repo :repo/cursor :file/path])] (str "  " f))
                    (when loading? "  …")
                    (when (seq lines)
                      (str "  " (inc (or offset 0)) "/" (count lines))))
@@ -205,15 +205,21 @@
                     (dim (get keys/pick-help action)))
                (= :picker type) (dim "type to filter · ↑/↓ move · enter select · esc cancel")
                (= :input type) (dim "enter submit · esc cancel")
+               (= :help type) (dim (cond
+                                     (ti/focused? (:mode/search mode)) "type to filter · enter done · esc clear"
+                                     (seq (ti/value (:mode/search mode))) "/ edit search · j/k scroll · esc clear · q close"
+                                     :else "/ search · j/k scroll · esc/q/? close"))
                (message-lines state) (dim "(see message above)")
                msg (if (= :error level) (fg 1 text) text)
-               (:app/loading? state) (dim "loading…")
+               (= :no-repo type) (dim "j/k move · enter or key select · q quit")
+               (get-in state [:app/repo :repo/loading?]) (dim "loading…")
                :else (dim "? help"))
+        {:repo/keys [marks ignore-immutable? revset]} (:app/repo state)
         right (str/join "  "
                         (remove nil?
-                                [(when (seq (:app/marks state)) (fg 5 (str "● " (count (:app/marks state)) " marked")))
-                                 (when (:app/ignore-immutable? state) (fg 1 "!immutable"))
-                                 (when (:app/revset state) (str (dim "revset ") (:app/revset state)))
+                                [(when (seq marks) (fg 5 (str "● " (count marks) " marked")))
+                                 (when ignore-immutable? (fg 1 "!immutable"))
+                                 (when revset (str (dim "revset ") revset))
                                  (str (dim "diff ") (name (:app/diff-tool state)))]))
         width (:app/width state)
         right-w (width-of right)
@@ -224,19 +230,34 @@
 ;; ---------------------------------------------------------------------------
 ;; Help
 
-(defn- help-columns [state]
-  (let [entries (for [[title bindings] keys/groups]
-                  (concat [(bold (fg 6 title))]
-                          (for [[ks _ desc] bindings]
-                            (str "  " (pad (fg 3 (str/join " " (map keys/display-key ks))) 14) desc))
-                          [""]))
-        extra [(bold (fg 6 "Modes"))
-               (str "  " (pad (fg 3 "pick") 14) "j/k move, enter select, esc cancel")
-               (str "  " (pad (fg 3 "rebase pick") 14) "a after, b before, s source mode")
-               (str "  " (pad (fg 3 "picker") 14) "type to filter, ↑/↓, enter, esc")
-               (str "  " (pad (fg 3 "menu") 14) "press the option key, esc cancel")
-               ""]
-        groups (concat entries [extra])
+(defn- help-groups
+  "[title [[keys description] ...]] of the help screen, keeping the bindings
+   whose group title, keys and description contain every word of `query`."
+  [query]
+  (let [terms (str/split (str/lower-case (str/trim query)) #"\s+")
+        groups (concat
+                (for [[title bindings] keys/groups]
+                  [title (for [[ks _ desc] bindings]
+                           [(str/join " " (map keys/display-key ks)) desc])])
+                [["Modes" [["help" "/ search, enter done, esc clear"]
+                           ["pick" "j/k move, enter select, esc cancel"]
+                           ["rebase pick" "a after, b before, s source mode"]
+                           ["picker" "type to filter, ↑/↓, enter, esc"]
+                           ["menu" "press the option key, esc cancel"]]]])
+        match? (fn [title [ks desc]]
+                 (let [haystack (str/lower-case (str title " " ks " " desc))]
+                   (every? #(str/includes? haystack %) terms)))]
+    (keep (fn [[title rows]]
+            (when-let [rows (seq (filter #(match? title %) rows))]
+              [title rows]))
+          groups)))
+
+(defn- help-columns [state groups]
+  (let [groups (for [[title rows] groups]
+                 (concat [(bold (fg 6 title))]
+                         (for [[ks desc] rows]
+                           (str "  " (pad (fg 3 ks) 14) desc))
+                         [""]))
         col-w 48
         ncols (max 1 (quot (:app/width state) col-w))
         total (reduce + (map count groups))
@@ -253,10 +274,41 @@
       (str/join (for [col columns] (pad (get col i "") col-w))))))
 
 (defn- help-screen [state height]
-  (let [lines (concat [(str (bold " jjtui") (dim "  keys  ·  esc/q/? close  ·  j/k scroll")) ""]
-                      (map #(str " " %) (help-columns state)))
+  (let [search (get-in state [:app/mode :mode/search])
+        query (ti/value search)
+        groups (help-groups query)
+        header (str (bold " jjtui") (dim "  keys")
+                    (when (or (ti/focused? search) (seq query))
+                      (str "  " (ti/text-input-view search))))
+        lines (concat [header ""]
+                      (if (seq groups)
+                        (map #(str " " %) (help-columns state groups))
+                        [(dim "  no matching keys")]))
         offset (max 0 (min (get-in state [:app/mode :mode/offset] 0) (- (count lines) height)))]
     (map #(fit % (:app/width state)) (take height (drop offset lines)))))
+
+;; ---------------------------------------------------------------------------
+;; Repo chooser
+
+(defn- chooser-screen [state]
+  (let [{:mode/keys [git-root choices selected]} (:app/mode state)
+        width (:app/width state)
+        recent? #(re-matches #"\d" (:choice/key %))
+        line (fn [i {:choice/keys [key label detail]}]
+               (let [s (str (bold (fg 3 key)) "  " label "  " (dim detail))]
+                 (if (= i selected)
+                   (with-bg (str (fg 5 " ❯ ") s) (:selected (palette state)) width)
+                   (fit (str "   " s) width))))]
+    (concat [""
+             (str " " (bold git-root) " is a git repo, but jj isn't set up in it.")
+             (dim " Choose how to continue:")
+             ""]
+            (map-indexed line (remove recent? choices))
+            [""
+             (bold (fg 6 " Recent repos"))]
+            (if (some recent? choices)
+              (keep-indexed (fn [i c] (when (recent? c) (line i c))) choices)
+              [(dim "   none yet: jjtui remembers the repos you open")]))))
 
 ;; ---------------------------------------------------------------------------
 ;; Root
@@ -267,8 +319,9 @@
         body-h (max 1 (- height 1 (count panel)))
         lw (log-width state)
         cursor-idx (st/cursor-index state)
-        body (if (= :help (get-in state [:app/mode :mode/type]))
-               (help-screen state body-h)
+        body (case (get-in state [:app/mode :mode/type])
+               :help (help-screen state body-h)
+               :no-repo (chooser-screen state)
                (let [left (log-lines state cursor-idx body-h lw)]
                  (if (:app/split? state)
                    (let [pw (- width lw 1)
