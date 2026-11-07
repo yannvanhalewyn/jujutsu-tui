@@ -24,7 +24,7 @@
      [["ctrl+u"] :cursor/half-up "Half page up"]
      [["@"] :cursor/working-copy "Jump to working copy"]
      [["/"] :search "Search change ids, commit ids, descriptions"]
-     [["w"] :workspace/switch "Switch workspace (picker)"]
+     [["w"] :repo/switch "Switch repo / workspace (recent, by frecency)"]
      [["R" "ctrl+r"] :refresh "Refresh"]
      [["?"] :help "Help"]
      [["q"] :quit "Quit"]]]

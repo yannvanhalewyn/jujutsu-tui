@@ -298,35 +298,38 @@
       (let [[_ fx] (press s "f" "enter")]
         (is (= ["bookmark" "set" "feat" "-r" "wwww" "--allow-backwards"] (jj-args fx)))))))
 
-(defn- workspace [wname root]
-  {:workspace/name wname :workspace/root root :workspace/change "c" :workspace/description "d"})
-
-(deftest workspace-switch-test
-  (let [[s fx] (press (loaded) "w")]
-    (is (= [{:fx/type :workspaces}] fx))
-    (testing "the current workspace isn't offered"
-      (let [[s] (press s {:type :msg/workspaces-loaded
-                          :msg/result {:jj/workspaces [(workspace "default" "/repo")
-                                                       (workspace "review" "/repo-review")
-                                                       (workspace "spike" "/repo-spike")]}})]
-        (is (= ["review  c  d" "spike  c  d"] (map :item/label (st/picker-matches (:app/mode s)))))
-        (testing "picking one opens it, and its log replaces this repo's"
-          (let [[s fx] (press s "s" "p" "enter")]
-            (is (nil? (:app/mode s)))
-            (is (= [{:fx/type :open-repo :fx/dir "/repo-spike"}] fx))
-            (let [[s fx] (press s {:type :msg/repo-opened
-                                   :msg/result {:repo/dir "/repo-spike" :repo/base-template "t"}})]
-              (is (= "/repo-spike" (get-in s [:app/repo :repo/dir])))
-              (is (nil? (:app/busy s)))
-              (is (= [:load-log] (map :fx/type fx))))))))
-    (testing "with no other workspace there's nothing to pick"
-      (let [[s] (press s {:type :msg/workspaces-loaded
-                          :msg/result {:jj/workspaces [(workspace "default" "/repo")]}})]
+(deftest repo-switch-test
+  (let [[s fx] (press (loaded) "w")
+        now 1000000000
+        visit (fn [dir n] {:visit/dir dir :visit/count n :visit/last (- now 7200000)})]
+    (is (= [{:fx/type :recent-repos :fx/exclude #{"/repo"}}] fx) "the open repo isn't offered")
+    (let [[s] (press s {:type :msg/recent-repos-loaded
+                        :msg/now now
+                        :msg/repos [(visit "/code/app" 9) (visit "/code/api" 4) (visit "/work/boat" 1)]})
+          labels #(map :item/label (st/picker-matches (:app/mode (first (apply press s %)))))]
+      (testing "best first, with the visits as detail"
+        (is (= ["/code/app" "/code/api" "/work/boat"] (labels [])))
+        (is (= "9 visits · 2h ago" (:item/detail (first (st/picker-matches (:app/mode s)))))))
+      (testing "equally good matches keep frecency order"
+        (is (= ["/code/app" "/code/api"] (labels ["a" "p"]))))
+      (testing "a match in the repo's own folder beats one elsewhere in its path"
+        (is (= ["/work/boat" "/code/app" "/code/api"] (labels ["o"]))))
+      (testing "scattered matches come last, however frequent"
+        (is (= ["/work/boat" "/code/app" "/code/api"] (labels ["o" "a"])))
+        (is (= ["/code/api"] (labels ["c" "d" "i"])) "matching scattered still counts"))
+      (testing "picking one opens it, and its log replaces this repo's"
+        (let [[s fx] (press s "a" "p" "i" "enter")]
+          (is (nil? (:app/mode s)))
+          (is (= [{:fx/type :open-repo :fx/dir "/code/api"}] fx))
+          (let [[s fx] (press s {:type :msg/repo-opened
+                                 :msg/result {:repo/dir "/code/api" :repo/base-template "t"}})]
+            (is (= "/code/api" (get-in s [:app/repo :repo/dir])))
+            (is (nil? (:app/busy s)))
+            (is (= [:load-log] (map :fx/type fx)))))))
+    (testing "without other visited repos there's nothing to pick"
+      (let [[s] (press s {:type :msg/recent-repos-loaded :msg/now now :msg/repos []})]
         (is (nil? (:app/mode s)))
-        (is (= "No other workspaces" (get-in s [:app/message :message/text])))))
-    (testing "jj's error is shown"
-      (let [[s] (press s {:type :msg/workspaces-loaded :msg/result {:jj/error "boom"}})]
-        (is (= :error (get-in s [:app/message :message/level])))))))
+        (is (= "No other repos visited yet" (get-in s [:app/message :message/text])))))))
 
 (deftest revset-error-test
   (let [[s fx] (press (loaded) "L" "x" "(" "enter")]

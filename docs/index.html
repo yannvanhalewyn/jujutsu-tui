@@ -346,7 +346,7 @@ bb demo-conflict-repo [dir]  # throwaway repo with a conflicted rebase, default 
         <tr><td class="k"><code>$width</code></td><td>pane / terminal width</td></tr>
         <tr><td class="k"><code>$repo</code></td><td>workspace root</td></tr>
       </tbody></table>
-      <div class="note">Commands run with the workspace root as cwd. If an interactive command exits non-zero (or the tool sets <code>:wait? true</code>), jjtui shows "Press any key to return to jjtui" before resuming. <code>diffview</code> / <code>difftool</code> require a colocated git repo.</div>
+      <div class="note">Commands run with the workspace root as cwd. If an interactive command exits non-zero (or the tool sets <code>:wait? true</code>), jjtui shows "Press any key to return to jjtui" before resuming. Tools using <code>$from-sha</code> / <code>$to-sha</code> (like <code>difftool</code>) require a colocated git repo.</div>
     </section>
 
     <!-- ============ ARCHITECTURE ============ -->
@@ -450,7 +450,7 @@ const ROADMAP = [
   { title: 'shift+tab toggles all files', area: 'log', status: 'done', notes: 'shift+tab is the primary key; i stays as an alias.' },
   { title: 'jj integration test suite (bb test)', area: 'testing', status: 'done', notes: 'jj_test runs against real jj repos, next to the app, log and config tests.' },
   { title: 'Search the log', area: 'log', status: 'done', notes: '/ jumps as you type to changes whose change id or commit id starts with the query, or whose description (any line) contains it, ignoring case; ↑/↓ cycle matches, esc goes back. enter makes it the active search: matches stay highlighted (› in the gutter, query painted in their lines), n/N step through them, / edits the query, esc clears it.' },
-  { title: 'Workspace switcher', area: 'workspace', status: 'done', notes: 'w: fuzzy picker of the repo\'s other jj workspaces (name, working-copy change, description); enter opens it in place, like the repo chooser.' },
+  { title: 'Repo / workspace switcher', area: 'workspace', status: 'done', notes: 'w: fuzzy picker of every repo jjtui has opened (jj workspaces included), ranked by frecency; a match in the repo\'s own folder name beats one elsewhere in its path, scattered matches come last. enter reopens jjtui on it.' },
 
   { title: 'Op log view', area: 'history', status: 'planned', notes: 'Browse jj op log; undo the selected operation.' },
   { title: 'Conflict navigation', area: 'operations', status: 'planned', notes: 'Jump between conflicted changes/files.' },
@@ -475,7 +475,7 @@ const KEYMAP = [
     { k: 'ctrl+d / ctrl+u', d: 'half page down / up' },
     { k: '@', d: 'jump to working copy' },
     { k: '/', d: 'search the log: change id / commit id prefix, or text in any description line (case-insensitive); prefilled with the active search' },
-    { k: 'w', d: 'switch workspace: fuzzy picker of the repo\'s other jj workspaces; enter reopens jjtui on it' },
+    { k: 'w', d: 'switch repo / workspace: fuzzy picker of the repos jjtui has opened, best first by frecency (visit count weighted by recency); a match in the folder name ranks above one elsewhere in the path, scattered matches last' },
     { k: 'n / N', d: 'with an active search: next / previous match, wrapping (otherwise new change / New…)' },
     { k: 'esc', d: 'with an active search: clear it (before clearing marks)' },
     { k: 'q', d: 'quit' },
@@ -559,7 +559,6 @@ const DEFAULT_CONFIG = [
   '              :difftastic ' + PAGED_JJ,
   '                           "diff" "--tool" "difft" "-r" "$revset" "$files"]',
   '              :delta      "jj diff --git -r $revset $files | delta --paging=always"',
-  '              :diffview   ["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]',
   '              :difftool   ["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]}',
   ' ;; command for the split diff pane (stdout is captured, ANSI colors kept)',
   ' :preview-command ["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]',
@@ -578,8 +577,8 @@ const DIFF_TOOLS = {
   jj:         { edn: PAGED_JJ + '\n             "diff" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '-r', '$revset', '$files']), note: "jj's built-in diff, honouring your ui.diff settings; paging forced through less -R." },
   difftastic: { edn: PAGED_JJ + '\n             "diff" "--tool" "difft" "-r" "$revset" "$files"]', cmd: PAGED_JJ_ARGV.concat(['diff', '--tool', 'difft', '-r', '$revset', '$files']), note: 'Structural diff via difftastic (needs the difft binary on PATH); paging forced through less -R.' },
   delta:      { edn: '"jj diff --git -r $revset $files | delta --paging=always"', cmd: 'jj diff --git -r $revset $files | delta --paging=always', note: 'A string runs with sh -c, so pipes work; every substituted value is shell-quoted.' },
-  diffview:   { edn: '["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]', cmd: ['nvim', '-c', 'DiffviewOpen $from-sha..$to-sha'], note: 'Opens diffview.nvim. Requires a colocated git repo.' },
   difftool:   { edn: '["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]', cmd: ['git', 'difftool', '--dir-diff', '$from-sha', '$to-sha', '--', '$files'], note: 'Your configured git difftool in dir-diff mode. Requires a colocated git repo.' },
+  'nvim + diffview': { key: 'nvim-difftool', example: true, edn: '["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]', cmd: ['nvim', '-c', 'DiffviewOpen $from-sha..$to-sha'], note: 'Example, not a default. Opens Neovim with sindrets/diffview.nvim on the commit range. Requires a colocated git repo.' },
   'nvim + difftastic': { key: 'nvim-difftastic', example: true, edn: '["nvim" "-c" "Difft $revset"]', cmd: ['nvim', '-c', 'Difft $revset'], note: 'Example, not a default. Opens Neovim with clabby/difftastic.nvim; :Difft <revset> runs jj diff -r <revset> --tool difft, so ranges (D) and marked sets work. Shows the whole revset even on a file row. No colocated git repo needed.' },
   'stat (map + :wait?)': { key: 'stat', example: true, wait: true, edn: '{:cmd ["jj" "diff" "--stat" "-r" "$revset" "$files"]\n                    :wait? true}', cmd: ['jj', 'diff', '--stat', '-r', '$revset', '$files'], note: 'Example, not a default. The map form adds :wait? true: the tool prints and exits, then jjtui shows "Press any key to return to jjtui" before resuming.' },
 };
@@ -606,7 +605,7 @@ const MODULES = [
   ['jjtui.log', 'Builds the `jj log` template and parses its output into display rows; jj still draws the graph.'],
   ['jjtui.config', 'Defaults, config file loading (EDN, `#env`), command templating.'],
   ['jjtui.repo', 'Finds where to start (the jj workspace, or a git repo without jj), opens repos and sets jj up with `jj git init --colocate` in the git root.'],
-  ['jjtui.history', 'Records visited repos and ranks them for the chooser\'s recent list.'],
+  ['jjtui.history', 'Records visited repos and ranks them by frecency for the chooser\'s recent list and the w picker.'],
   ['jjtui.keys', 'Key names and the normal-mode keymap, which is also the source of the help screen.'],
   ['jjtui.state', 'Read-only queries on the app state, shared by jjtui.app and jjtui.view.'],
   ['jjtui.view', 'Renders the state to a string with charm styles; layout helpers are shared with jjtui.app so scrolling and drawing agree.'],
@@ -1072,7 +1071,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
         openDiff({ 'from-sha': CH[fork].sha, 'to-sha': CH[it.ci].sha, revset: 'fork_point(trunk() | ' + it.label + ')..' + it.label, files: [], width: 96, repo: '~/code/jjtui-demo' });
       }); break;
       case 'v': openPicker('Diff tool', TOOLS.map(t => ({ label: t })), it => { S.tool = it.label; msg('diff tool: ' + it.label); }); break;
-      case 'w': openPicker('Switch workspace', [{ label: 'review  kxryzmor  Review login' }, { label: 'spike  tlmrqvwn  Try a new layout' }], it => msg('opened ~/code/jjtui-demo-' + it.label.split(' ')[0] + ' (disabled in this demo)')); break;
+      case 'w': openPicker('Switch repo', [{ label: '~/code/jjtui-demo-review  12 visits · 2h ago' }, { label: '~/code/dotfiles  3 visits · 4d ago' }], it => msg('opened ' + it.label.split(' ')[0] + ' (disabled in this demo)')); break;
       case 'm': case 'space':
         if (S.marks.has(S.cur.ci)) S.marks.delete(S.cur.ci); else S.marks.add(S.cur.ci);
         move(1); break;

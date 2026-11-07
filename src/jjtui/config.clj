@@ -58,7 +58,6 @@
    :diff-tools {:jj (into paged-jj ["diff" "-r" "$revset" "$files"])
                 :difftastic (into paged-jj ["diff" "--tool" "difft" "-r" "$revset" "$files"])
                 :delta "jj diff --git -r $revset $files | delta --paging=always"
-                :diffview ["nvim" "-c" "DiffviewOpen $from-sha..$to-sha"]
                 :difftool ["git" "difftool" "--dir-diff" "$from-sha" "$to-sha" "--" "$files"]}
    :preview-command ["jj" "diff" "--no-pager" "--color=always" "-r" "$revset" "$files"]
    :revset nil

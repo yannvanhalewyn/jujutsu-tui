@@ -29,7 +29,8 @@
 
 (def PickerItem
   [:map
-   [:item/label :string]
+   [:item/label {:doc "What the query matches"} :string]
+   [:item/detail {:optional true :doc "Shown dimmed after the label, not matched"} :string]
    [:item/value any?]
    [:item/create? {:optional true} :boolean]])
 
@@ -61,7 +62,7 @@
            [:mode/source-flag [:enum "-r" "-s" "-b"]]]]
    [:picker [:map
              [:mode/type [:= :picker]]
-             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set :workspace]]
+             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set :repo]]
              [:mode/title :string]
              [:mode/items [:vector PickerItem]]
              [:mode/selected :int]
@@ -273,15 +274,29 @@
             (recur (inc qi) (inc ti) (if (neg? last-match) gaps (+ gaps (- ti last-match 1))) ti)
             :else (recur qi (inc ti) gaps last-match)))))))
 
+(defn- repo-tier
+  "How well `query` matches the repo path `dir`, lower is better: in its own
+   folder name, elsewhere in the path, or scattered."
+  [query dir score]
+  (cond
+    (>= score 1000) 2
+    (str/includes? (str/lower-case (or (last (str/split dir #"/")) "")) (str/lower-case query)) 0
+    :else 1))
+
 (defn picker-matches
-  "The picker's visible items: matching items, best first. The bookmark picker
-   also offers to create the typed name, after any matches."
+  "The picker's visible items: matching items, best first. The repo picker's
+   items come ranked by frecency, which a query only breaks into tiers of
+   match quality. The bookmark picker also offers to create the typed name,
+   after any matches."
   [{:mode/keys [items input purpose]}]
   (let [query (str/trim (ti/value input))
+        rank (if (= :repo purpose)
+               (fn [s item] (repo-tier query (:item/label item) s))
+               (fn [s _] s))
         matched (->> items
                      (keep (fn [item]
                              (when-let [s (fuzzy-score query (:item/label item))]
-                               [s item])))
+                               [(rank s item) item])))
                      (sort-by first)
                      (mapv second))]
     (if (and (= :bookmark-set purpose)

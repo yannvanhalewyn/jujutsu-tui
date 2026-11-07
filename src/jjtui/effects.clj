@@ -9,6 +9,7 @@
    [babashka.process :as p]
    [charm.program :as program]
    [clojure.string :as str]
+   [jjtui.history :as history]
    [jjtui.jj :as jj]
    [jjtui.log :as log]
    [jjtui.repo :as repo]
@@ -46,9 +47,10 @@
                              [:type [:= :msg/description-loaded]]
                              [:msg/change-id :string]
                              [:msg/result jj/Description]]]
-   [:msg/workspaces-loaded [:map
-                            [:type [:= :msg/workspaces-loaded]]
-                            [:msg/result jj/Workspaces]]]
+   [:msg/recent-repos-loaded [:map
+                              [:type [:= :msg/recent-repos-loaded]]
+                              [:msg/repos {:doc "Best first"} [:vector history/Suggestion]]
+                              [:msg/now {:doc "Epoch millis the repos were ranked at"} :int]]]
    [:msg/diff-resolved [:map
                         [:type [:= :msg/diff-resolved]]
                         [:msg/result [:or st/DiffTarget jj/Failure]]]]
@@ -77,7 +79,7 @@
    [:jj JjEffect]
    [:bookmarks [:map [:fx/type [:= :bookmarks]] [:fx/purpose BookmarkPurpose]]]
    [:description [:map [:fx/type [:= :description]] [:fx/change-id :string]]]
-   [:workspaces [:map [:fx/type [:= :workspaces]]]]
+   [:recent-repos [:map [:fx/type [:= :recent-repos]] [:fx/exclude {:doc "Dirs to leave out"} [:set :string]]]]
    [:resolve-diff [:map [:fx/type [:= :resolve-diff]] [:fx/target st/DiffTarget]]]
    [:debounce [:map [:fx/type [:= :debounce]] [:fx/ms :int] [:fx/msg Msg]]]
    [:preview [:map [:fx/type [:= :preview]] [:fx/key st/PreviewKey]]]
@@ -152,9 +154,13 @@
       (program/cmd #(hash-map :type :msg/diff-resolved
                               :msg/result (resolve-diff dir (:fx/target effect))))
 
-      :workspaces
-      (program/cmd #(hash-map :type :msg/workspaces-loaded
-                              :msg/result (jj/workspaces dir)))
+      :recent-repos
+      (program/cmd #(let [now (System/currentTimeMillis)]
+                      {:type :msg/recent-repos-loaded
+                       :msg/repos (history/suggestions (history/read-visits (history/default-path))
+                                                       now
+                                                       (:fx/exclude effect))
+                       :msg/now now}))
 
       :debounce
       (program/cmd (fn [] (Thread/sleep (long (:fx/ms effect))) (:fx/msg effect)))

@@ -132,10 +132,11 @@
           (str (ti/text-input-view input) "  " (dim (str (count matches) "/" (count (:mode/items mode)))))]
          (if (empty? shown)
            [(dim "  no matches")]
-           (for [[i item] shown]
+           (for [[i item] shown
+                 :let [detail (some->> (:item/detail item) (str "  ") dim)]]
              (if (= i sel)
-               (with-bg (str (fg 5 "❯ ") (bold (:item/label item))) (:selected (palette state)) (:app/width state))
-               (str "  " (:item/label item)))))))
+               (with-bg (str (fg 5 "❯ ") (bold (:item/label item)) detail) (:selected (palette state)) (:app/width state))
+               (str "  " (:item/label item) detail))))))
 
       :menu
       (concat

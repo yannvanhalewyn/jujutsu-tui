@@ -469,7 +469,8 @@
       [(assoc-in state [:app/repo :repo/cursor] (change-cursor wc)) []]
       [(error state "The working copy is not in this revset") []])
     :refresh (reload state)
-    :workspace/switch [(info state "Loading workspaces…") [{:fx/type :workspaces}]]
+    :repo/switch [(info state "Loading recent repos…")
+                  [{:fx/type :recent-repos :fx/exclude #{(get-in state [:app/repo :repo/dir])}}]]
     :search [(assoc state :app/mode {:mode/type :search
                                      :mode/input (input (get-in state [:app/repo :repo/search]) "/")
                                      :mode/origin (get-in state [:app/repo :repo/cursor])})
@@ -636,7 +637,7 @@
       :diff-tool [(info (assoc state :app/diff-tool value) (str "Diff tool: " (name value))) []]
       :branch-diff (open-diff state (branch-target value))
       :bookmark-op (bookmark-chosen state op value)
-      :workspace (open-repo state :open value)
+      :repo (open-repo state :open value)
       :bookmark-set
       (with-entry state
         (fn [entry]
@@ -706,6 +707,9 @@
       (< minutes (* 60 24)) (str (quot minutes 60) "h ago")
       :else (str (quot minutes (* 60 24)) "d ago"))))
 
+(defn- visit-detail [{n :visit/count last-ms :visit/last} now]
+  (str n (if (= 1 n) " visit · " " visits · ") (ago (- now last-ms))))
+
 (defn chooser
   "The repo chooser for a git repo without jj: set jj up in it, open the jj
    repo it sits in (`parent`), or one of the `recent` repos
@@ -723,10 +727,10 @@
                          :choice/label "Open the jj repo it's inside"
                          :choice/detail parent
                          :choice/action [:open parent]}))
-         (map-indexed (fn [i {dir :visit/dir n :visit/count last-ms :visit/last}]
+         (map-indexed (fn [i {dir :visit/dir :as visit}]
                         {:choice/key (str (inc i))
                          :choice/label dir
-                         :choice/detail (str n (if (= 1 n) " visit · " " visits · ") (ago (- now last-ms)))
+                         :choice/detail (visit-detail visit now)
                          :choice/action [:open dir]}))
          (take 9 recent))})
 
@@ -933,20 +937,16 @@
            (open-picker purpose (if set? "Set bookmark (type a new name to create)" "Diff branch") items))
        []])))
 
-(defn- workspaces-loaded
-  "Offers the repo's other workspaces; picking one opens it like any repo."
-  [state {:msg/keys [result]}]
-  (if-let [err (:jj/error result)]
-    [(error state err) []]
-    (let [others (remove #(= (get-in state [:app/repo :repo/dir]) (:workspace/root %))
-                         (:jj/workspaces result))]
-      (if (empty? others)
-        [(info state "No other workspaces") []]
-        [(open-picker (assoc state :app/message nil) :workspace "Switch workspace"
-                      (vec (for [{:workspace/keys [name root change description]} others]
-                             {:item/label (str name "  " change "  " description)
-                              :item/value root})))
-         []]))))
+(defn- recent-repos-loaded
+  "Offers the visited repos, best first; picking one opens it."
+  [state {:msg/keys [repos now]}]
+  (if (empty? repos)
+    [(info state "No other repos visited yet") []]
+    [(open-picker (assoc state :app/message nil) :repo "Switch repo"
+                  (mapv (fn [{dir :visit/dir :as visit}]
+                          {:item/label dir :item/detail (visit-detail visit now) :item/value dir})
+                        repos))
+     []]))
 
 (defn after-exec
   "Called by the main loop once an interactive command finished."
@@ -974,7 +974,7 @@
           :msg/log-loaded (log-loaded state msg)
           :msg/jj-done (jj-done state msg)
           :msg/bookmarks-loaded (bookmarks-loaded state msg)
-          :msg/workspaces-loaded (workspaces-loaded state msg)
+          :msg/recent-repos-loaded (recent-repos-loaded state msg)
           :msg/description-loaded (description-loaded state msg)
           :msg/repo-opened (repo-opened state msg)
           :msg/diff-resolved (let [result (:msg/result msg)]

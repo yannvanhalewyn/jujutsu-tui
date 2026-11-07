@@ -44,12 +44,4 @@
         (let [res (jj/bookmarks dir)]
           (is (nil? (explain jj/Bookmarks res)))
           (is (= #{"main" "main@origin" "feature/login" "feature/docs"}
-                 (set (map :bookmark/ref (:jj/bookmarks res)))))))
-
-      (testing "workspaces, with their roots"
-        (let [other (str (fs/canonicalize (fs/path tmp "repo-review")))]
-          (is (zero? (:jj/exit (jj/run dir ["workspace" "add" "--name" "review" other]))))
-          (let [res (jj/workspaces dir)]
-            (is (nil? (explain jj/Workspaces res)))
-            (is (= {"default" (str (fs/canonicalize dir)) "review" other}
-                   (into {} (map (juxt :workspace/name :workspace/root)) (:jj/workspaces res))))))))))
+                 (set (map :bookmark/ref (:jj/bookmarks res)))))))))))

@@ -16,6 +16,13 @@
 
 (def Visits [:map-of :string Visit])
 
+(def Suggestion
+  "A visited repo, as `suggestions` returns it."
+  [:map
+   [:visit/dir :string]
+   [:visit/count pos-int?]
+   [:visit/last {:doc "Epoch millis"} :int]])
+
 (def ^:private max-entries 100)
 
 (defn default-path []
