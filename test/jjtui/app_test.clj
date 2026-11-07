@@ -1,5 +1,6 @@
 (ns jjtui.app-test
   (:require
+   [charm.components.text-input :as ti]
    [charm.message :as msg]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing]]
@@ -46,7 +47,7 @@
 (defn- loaded
   "A state with the sample log loaded, cursor on the working copy."
   []
-  (let [s (checked st/State (assoc (app/init-state {:config config/defaults
+  (let [s (checked st/State (assoc (app/init-state {:config (config/user->internal config/defaults)
                                                     :repo {:repo/dir "/repo" :repo/base-template "t"}})
                                    :app/width 100 :app/height 30))
         [s [fx]] (app/start s)]
@@ -93,15 +94,43 @@
              (map #(cursor-id (first (apply press s "/" "b" %))) [["down"] ["down" "down"] ["up"]]))))
     (testing "a query matching nothing goes back to where the search started"
       (is (= "wwww" (cursor-id (first (press s "/" "a" "z"))))))
-    (testing "enter keeps the cursor on the match, escape goes back"
+    (testing "enter keeps the cursor on the match and activates the search, escape goes back"
       (let [[s'] (press s "/" "b" "down" "enter")]
         (is (nil? (:app/mode s')))
-        (is (= "aaaa" (cursor-id s'))))
+        (is (= "aaaa" (cursor-id s')))
+        (is (= "b" (get-in s' [:app/repo :repo/search]))))
       (let [[s'] (press s "/" "b" "escape")]
         (is (nil? (:app/mode s')))
-        (is (= "wwww" (cursor-id s')))))
-    (testing "enter without a match says so"
-      (is (= :error (get-in (first (press s "/" "z" "enter")) [:app/message :message/level]))))))
+        (is (= "wwww" (cursor-id s')))
+        (is (nil? (get-in s' [:app/repo :repo/search])))))
+    (testing "enter without a match says so and leaves no active search"
+      (let [[s'] (press s "/" "z" "enter")]
+        (is (= :error (get-in s' [:app/message :message/level])))
+        (is (nil? (get-in s' [:app/repo :repo/search])))))))
+
+(deftest active-search-test
+  (let [[s] (press (loaded) "/" "b" "enter")]
+    (is (= "bbbb" (cursor-id s)))
+    (testing "n and N step through the matches, wrapping, instead of creating changes"
+      (let [[s' fx] (press s "n")]
+        (is (= "aaaa" (cursor-id s')))
+        (is (empty? fx)))
+      (is (= "bbbb" (cursor-id (first (press s "n" "n")))))
+      (is (= "aaaa" (cursor-id (first (press s "N"))))))
+    (testing "n and N also move while picking a target"
+      (let [[s'] (press s "r" "n")]
+        (is (= :pick (get-in s' [:app/mode :mode/type])))
+        (is (= "aaaa" (cursor-id s')))))
+    (testing "/ starts from the active query; escape keeps it"
+      (is (= "b" (ti/value (get-in (first (press s "/")) [:app/mode :mode/input]))))
+      (is (= "b" (get-in (first (press s "/" "x" "escape")) [:app/repo :repo/search])))
+      (is (nil? (get-in (first (press s "/" "x" "enter")) [:app/repo :repo/search])) "bx matches nothing"))
+    (testing "escape clears the search before the marks, then n creates a change again"
+      (let [[s'] (press s "m" "escape")]
+        (is (nil? (get-in s' [:app/repo :repo/search])))
+        (is (= #{"bbbb"} (get-in s' [:app/repo :repo/marks])))
+        (is (empty? (get-in (first (press s' "escape")) [:app/repo :repo/marks])))
+        (is (= "new" (first (jj-args (second (press s' "n"))))))))))
 
 (deftest cursor-survives-reload-test
   (let [[s] (press (loaded) "j")
@@ -269,6 +298,36 @@
       (let [[_ fx] (press s "f" "enter")]
         (is (= ["bookmark" "set" "feat" "-r" "wwww" "--allow-backwards"] (jj-args fx)))))))
 
+(defn- workspace [wname root]
+  {:workspace/name wname :workspace/root root :workspace/change "c" :workspace/description "d"})
+
+(deftest workspace-switch-test
+  (let [[s fx] (press (loaded) "w")]
+    (is (= [{:fx/type :workspaces}] fx))
+    (testing "the current workspace isn't offered"
+      (let [[s] (press s {:type :msg/workspaces-loaded
+                          :msg/result {:jj/workspaces [(workspace "default" "/repo")
+                                                       (workspace "review" "/repo-review")
+                                                       (workspace "spike" "/repo-spike")]}})]
+        (is (= ["review  c  d" "spike  c  d"] (map :item/label (st/picker-matches (:app/mode s)))))
+        (testing "picking one opens it, and its log replaces this repo's"
+          (let [[s fx] (press s "s" "p" "enter")]
+            (is (nil? (:app/mode s)))
+            (is (= [{:fx/type :open-repo :fx/dir "/repo-spike"}] fx))
+            (let [[s fx] (press s {:type :msg/repo-opened
+                                   :msg/result {:repo/dir "/repo-spike" :repo/base-template "t"}})]
+              (is (= "/repo-spike" (get-in s [:app/repo :repo/dir])))
+              (is (nil? (:app/busy s)))
+              (is (= [:load-log] (map :fx/type fx))))))))
+    (testing "with no other workspace there's nothing to pick"
+      (let [[s] (press s {:type :msg/workspaces-loaded
+                          :msg/result {:jj/workspaces [(workspace "default" "/repo")]}})]
+        (is (nil? (:app/mode s)))
+        (is (= "No other workspaces" (get-in s [:app/message :message/text])))))
+    (testing "jj's error is shown"
+      (let [[s] (press s {:type :msg/workspaces-loaded :msg/result {:jj/error "boom"}})]
+        (is (= :error (get-in s [:app/message :message/level])))))))
+
 (deftest revset-error-test
   (let [[s fx] (press (loaded) "L" "x" "(" "enter")]
     (is (= "x(" (get-in s [:app/repo :repo/revset])))
@@ -283,7 +342,7 @@
   []
   (let [now 1000000000]
     (checked st/State
-             (app/init-state {:config config/defaults
+             (app/init-state {:config (config/user->internal config/defaults)
                               :mode (app/chooser {:git-root "/work/lib"
                                                   :parent "/work"
                                                   :recent [{:visit/dir "/code/other" :visit/count 3 :visit/last (- now 7200000)}]

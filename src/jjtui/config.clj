@@ -1,5 +1,21 @@
 (ns jjtui.config
-  "Defaults, config file loading and command templating."
+  "Defaults, config file loading and command templating.
+
+   Config comes in two shapes:
+
+   - User config: what config.edn holds and the docs describe. Keys are
+     unqualified (:diff-tool, :split …) to keep the file short, and values
+     allow sugar: a diff tool is a bare string or vector, or a map
+     {:cmd … :wait? true} when it needs options; flags are any truthy value.
+     `defaults` and `merge-config` work in this shape, so the defaults read
+     like a config file.
+   - Internal config (`Config`): what the app keeps under :app/config. Keys
+     are qualified (:config/, :tool/) like the rest of the app state, and the
+     sugar is expanded so there is one form per value: every diff tool is
+     {:tool/cmd … :tool/wait? …}, flags are booleans.
+
+   `user->internal` is the only bridge; nothing past `load-config` sees user
+   config."
   (:require
    [babashka.fs :as fs]
    [clojure.edn :as edn]
@@ -10,7 +26,34 @@
    output doesn't flash by when the TUI resumes."
   ["jj" "--config" "ui.paginate=auto" "--config" "ui.pager.command=[\"less\",\"-R\"]"])
 
+;; ---------------------------------------------------------------------------
+;; Internal config
+
+(def Command
+  "A command template: a string run through `sh -c`, or an argv vector."
+  [:or :string [:sequential :string]])
+
+(def Tool
+  [:map {:closed true}
+   [:tool/cmd Command]
+   [:tool/wait? {:doc "Wait for a key after the tool exits"} :boolean]])
+
+(def Config
+  [:map {:closed true}
+   [:config/diff-tool {:doc "Initially active key of :config/diff-tools"} :keyword]
+   [:config/diff-tools [:map-of :keyword Tool]]
+   [:config/preview-command Command]
+   [:config/revset {:doc "nil = jj's revsets.log"} [:maybe :string]]
+   [:config/log-template {:doc "nil = jj's templates.log"} [:maybe :string]]
+   [:config/show-files? :boolean]
+   [:config/split? :boolean]
+   [:config/split-ratio number?]])
+
+;; ---------------------------------------------------------------------------
+;; User config
+
 (def defaults
+  "The user config used for keys config.edn leaves out."
   {:diff-tool :jj
    :diff-tools {:jj (into paged-jj ["diff" "-r" "$revset" "$files"])
                 :difftastic (into paged-jj ["diff" "--tool" "difft" "-r" "$revset" "$files"])
@@ -43,32 +86,46 @@
   [user]
   (deep-merge defaults (or user {})))
 
+(defn- user->tool
+  "A diff tool is a command template, or {:cmd template :wait? bool}."
+  [tool]
+  (if (map? tool)
+    {:tool/cmd (:cmd tool) :tool/wait? (boolean (:wait? tool))}
+    {:tool/cmd tool :tool/wait? false}))
+
+(defn user->internal
+  "Translates a complete user config (see `merge-config`) into a `Config`,
+   expanding its sugar."
+  [user]
+  {:config/diff-tool (:diff-tool user)
+   :config/diff-tools (update-vals (:diff-tools user) user->tool)
+   :config/preview-command (:preview-command user)
+   :config/revset (:revset user)
+   :config/log-template (:log-template user)
+   :config/show-files? (boolean (:show-files user))
+   :config/split? (boolean (:split user))
+   :config/split-ratio (:split-ratio user)})
+
 (defn load-config
-  "Returns {:config merged-config :error message-or-nil :path path}."
+  "Reads the user config at `override` (see `config-path`). Returns
+   {:config Config :error message-or-nil :path path}; on error the config is
+   the defaults."
   [override]
   (let [path (config-path override)]
     (if-not (fs/exists? path)
-      {:config defaults :path path}
+      {:config (user->internal defaults) :path path}
       (try
-        {:config (merge-config (edn/read-string {:readers {'env #(System/getenv (str %))}}
-                                                (slurp path)))
+        {:config (user->internal
+                  (merge-config (edn/read-string {:readers {'env #(System/getenv (str %))}}
+                                                 (slurp path))))
          :path path}
         (catch Exception e
-          {:config defaults
+          {:config (user->internal defaults)
            :path path
            :error (str "Could not read " path ": " (ex-message e))})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Command templates
-
-(defn tool-spec
-  "Normalizes a diff tool entry to {:cmd string-or-vector :wait? bool}. A tool
-   is a string, a vector, or a map with :cmd and an optional :wait?, which asks
-   for a keypress before returning to the TUI (for tools that print and exit)."
-  [tool]
-  (if (map? tool)
-    {:cmd (:cmd tool) :wait? (boolean (:wait? tool))}
-    {:cmd tool :wait? false}))
 
 (defn shell-quote [s]
   (str "'" (str/replace s "'" "'\\''") "'"))

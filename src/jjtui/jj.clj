@@ -33,6 +33,15 @@
 (def CommitId [:or [:map [:jj/id :string]] Failure])
 (def Description [:or [:map [:jj/description :string]] Failure])
 
+(def Workspace
+  [:map
+   [:workspace/name :string]
+   [:workspace/root {:doc "Absolute, as jj resolved it"} :string]
+   [:workspace/change {:doc "Short change id of its working copy"} :string]
+   [:workspace/description {:doc "First line of its working copy's description"} :string]])
+
+(def Workspaces [:or [:map [:jj/workspaces [:vector Workspace]]] Failure])
+
 ;; ---------------------------------------------------------------------------
 ;; Commands
 
@@ -114,6 +123,29 @@
   (let [res (run dir ["bookmark" "list" "--all-remotes" "-T" bookmark-template])]
     (if (ok? res)
       {:jj/bookmarks (parse-bookmarks (:jj/out res))}
+      (error res))))
+
+(def ^:private workspace-template
+  (str "name ++ \"\\x1f\" ++ root ++ \"\\x1f\" ++ "
+       "target.change_id().short(8) ++ \"\\x1f\" ++ "
+       "target.description().first_line() ++ \"\\n\""))
+
+(defn parse-workspaces [out]
+  (->> (str/split-lines out)
+       (remove str/blank?)
+       (mapv (fn [line]
+               (let [[wname root change desc] (str/split line #"\u001f" -1)]
+                 {:workspace/name wname
+                  :workspace/root root
+                  :workspace/change change
+                  :workspace/description desc})))))
+
+(defn workspaces
+  "The repo's workspaces, in jj's order."
+  [dir]
+  (let [res (run dir ["workspace" "list" "-T" workspace-template])]
+    (if (ok? res)
+      {:jj/workspaces (parse-workspaces (:jj/out res))}
       (error res))))
 
 (defn commit-ids

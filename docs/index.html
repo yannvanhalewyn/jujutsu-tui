@@ -174,6 +174,7 @@ select.sel { padding: 5px 10px; border: 1px solid var(--border); border-radius: 
 .c-yel { color: #d7d75f; } .c-grn { color: #5fd75f; } .c-grnb { color: #87ff5f; font-weight: bold; }
 .c-red { color: #ff5f5f; } .c-cyn { color: #5fd7d7; } .c-wht { color: #eeeeee; } .c-org { color: #ffaf5f; }
 .c-mark { color: #ffd75f; font-weight: bold; }
+.c-hl { background: #d7af00; color: #121212; }
 .c-b { font-weight: bold; }
 .c-tag { background: #d7875f; color: #121212; padding: 0 3px; }
 .c-sel { background: #3a3a5a; }
@@ -448,7 +449,8 @@ const ROADMAP = [
   { title: 'Resolve conflicts', area: 'operations', status: 'done', notes: 'M: jj resolve -r X in the merge tool (only the file on a file row); refuses changes without conflicts.' },
   { title: 'shift+tab toggles all files', area: 'log', status: 'done', notes: 'shift+tab is the primary key; i stays as an alias.' },
   { title: 'jj integration test suite (bb test)', area: 'testing', status: 'done', notes: 'jj_test runs against real jj repos, next to the app, log and config tests.' },
-  { title: 'Search the log', area: 'log', status: 'done', notes: '/ jumps as you type to changes whose change id or commit id starts with the query, or whose description (any line) contains it, ignoring case; ↑/↓ cycle matches, enter keeps, esc goes back.' },
+  { title: 'Search the log', area: 'log', status: 'done', notes: '/ jumps as you type to changes whose change id or commit id starts with the query, or whose description (any line) contains it, ignoring case; ↑/↓ cycle matches, esc goes back. enter makes it the active search: matches stay highlighted (› in the gutter, query painted in their lines), n/N step through them, / edits the query, esc clears it.' },
+  { title: 'Workspace switcher', area: 'workspace', status: 'done', notes: 'w: fuzzy picker of the repo\'s other jj workspaces (name, working-copy change, description); enter opens it in place, like the repo chooser.' },
 
   { title: 'Op log view', area: 'history', status: 'planned', notes: 'Browse jj op log; undo the selected operation.' },
   { title: 'Conflict navigation', area: 'operations', status: 'planned', notes: 'Jump between conflicted changes/files.' },
@@ -460,7 +462,6 @@ const ROADMAP = [
   { title: 'Mouse support', area: 'ui', status: 'idea', notes: 'Click to move the cursor, scroll panes.' },
   { title: 'Evolog view', area: 'history', status: 'idea', notes: 'jj evolog for the cursor change.' },
   { title: 'Bookmark tracking / untracking', area: 'bookmarks', status: 'idea', notes: 'jj bookmark track / untrack for remote bookmarks.' },
-  { title: 'jj workspace switcher', area: 'workspace', status: 'idea', notes: 'List and switch between jj workspaces.' },
 ];
 
 /* =====================================================================
@@ -473,7 +474,10 @@ const KEYMAP = [
     { k: 'g / G', d: 'first / last change' },
     { k: 'ctrl+d / ctrl+u', d: 'half page down / up' },
     { k: '@', d: 'jump to working copy' },
-    { k: '/', d: 'search the log: change id / commit id prefix, or text in any description line (case-insensitive)' },
+    { k: '/', d: 'search the log: change id / commit id prefix, or text in any description line (case-insensitive); prefilled with the active search' },
+    { k: 'w', d: 'switch workspace: fuzzy picker of the repo\'s other jj workspaces; enter reopens jjtui on it' },
+    { k: 'n / N', d: 'with an active search: next / previous match, wrapping (otherwise new change / New…)' },
+    { k: 'esc', d: 'with an active search: clear it (before clearing marks)' },
     { k: 'q', d: 'quit' },
     { k: '?', d: 'help' },
     { k: 'R / ctrl+r', d: 'refresh' },
@@ -495,7 +499,7 @@ const KEYMAP = [
   { id: 'marks', title: 'Marks', sub: 'selection for batch operations', rows: [
     { k: 'm / space', d: 'toggle mark on change, move down' },
     { k: 'c', d: 'clear marks' },
-    { k: 'esc', d: 'clear marks (when no mode active)' },
+    { k: 'esc', d: 'clear marks (when no mode or search is active)' },
   ], note: 'Batch semantics: with marks, `enter` (combined diff), `n` (merge: new change with all marks as parents), `a` (abandon all), `r` (rebase marks), `s` (squash marks into cursor change), `S` (squash marks into picked target), `p`/`P` (push) operate on the marks; otherwise on the cursor change. Marks are cleared after mutating batch ops.' },
   { id: 'ops', title: 'Change operations', sub: 'mnemonic', cols: ['Key', 'Mnemonic', 'jj command'], rows: [
     { k: 'd', m: 'describe', d: 'popup editing the first line of X\'s description (the rest is kept): enter = `jj describe -r X -m …`, ctrl+e = `jj describe -r X --editor -m …` (jj\'s configured editor, e.g. $EDITOR), esc = cancel' },
@@ -531,8 +535,8 @@ const KEYMAP = [
     { k: 'n / esc', m: 'Confirm', d: 'no' },
     { k: 'type', m: 'Search', d: 'jump to the first match from where the search started (wraps)' },
     { k: '↑ / ↓ or ctrl+p / ctrl+n', m: 'Search', d: 'previous / next match (wraps)' },
-    { k: 'enter', m: 'Search', d: 'keep the cursor on the match' },
-    { k: 'esc', m: 'Search', d: 'back to where the search started' },
+    { k: 'enter', m: 'Search', d: 'keep the cursor on the match; the search stays active (highlighted, n/N)' },
+    { k: 'esc', m: 'Search', d: 'back to where the search started; the active search is left as it was' },
     { k: '/', m: 'Help', d: 'search bindings (type to filter, enter keeps the filter)' },
     { k: 'esc', m: 'Help', d: 'clear the search, then close' },
   ]},
@@ -906,6 +910,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     cur: { ci: 0, fi: -1 }, marks: new Set(), expanded: new Set(), split: false, ratio: 0.5,
     help: false, mode: 'normal', pick: null, picker: null, menu: null, confirm: null, input: null,
     ignoreImm: false, revset: null, tool: 'jj', msg: { text: 'press ? for help', kind: '' }, busy: false, noEdit: false,
+    searchQ: null, // the active search: highlighted, n/N step through it
   };
   const term = $('#term'), logEl = $('#tLog'), diffEl = $('#tDiff'), panelEl = $('#tPanel'), statusEl = $('#tStatus'),
         helpEl = $('#tHelp'), suspEl = $('#tSusp');
@@ -1020,10 +1025,19 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     const after = i => d > 0 ? (here ? i >= from : i > from) : (here ? i <= from : i < from);
     return c.find(after) ?? c[0];
   }
+  function stepSearch(q, d) {
+    const m = searchMatches(q);
+    if (!m.length) { msg('No change matches "' + q.trim() + '"', 'err'); return; }
+    S.cur = { ci: nextMatch(m, S.cur.ci, d, false), fi: -1 };
+  }
+  // What the log highlights: the query being typed, else the active search.
+  const highlightQuery = () => (S.mode === 'search' ? S.search.query.trim() : S.searchQ || '').toLowerCase();
 
   /* ---- key handling ---- */
   function normal(key) {
     const c = CH[S.cur.ci];
+    if (S.searchQ && (key === 'n' || key === 'N')) { stepSearch(S.searchQ, key === 'n' ? 1 : -1); return; }
+    if (S.searchQ && key === 'esc') { S.searchQ = null; return; }
     switch (key) {
       case 'j': case '↓': move(1); break;
       case 'k': case '↑': move(-1); break;
@@ -1032,7 +1046,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
       case 'ctrl+d': move(PAGE); break;
       case 'ctrl+u': move(-PAGE); break;
       case '@': S.cur = { ci: CH.findIndex(x => x.wc), fi: -1 }; break;
-      case '/': S.mode = 'search'; S.search = { query: '', origin: Object.assign({}, S.cur) }; break;
+      case '/': S.mode = 'search'; S.search = { query: S.searchQ || '', origin: Object.assign({}, S.cur) }; break;
       case 'q': msg('q quits jjtui (disabled in this demo)'); break;
       case '?': S.help = { query: '', typing: false }; break;
       case 'R': case 'ctrl+r': msg('refreshed'); break;
@@ -1058,6 +1072,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
         openDiff({ 'from-sha': CH[fork].sha, 'to-sha': CH[it.ci].sha, revset: 'fork_point(trunk() | ' + it.label + ')..' + it.label, files: [], width: 96, repo: '~/code/jjtui-demo' });
       }); break;
       case 'v': openPicker('Diff tool', TOOLS.map(t => ({ label: t })), it => { S.tool = it.label; msg('diff tool: ' + it.label); }); break;
+      case 'w': openPicker('Switch workspace', [{ label: 'review  kxryzmor  Review login' }, { label: 'spike  tlmrqvwn  Try a new layout' }], it => msg('opened ~/code/jjtui-demo-' + it.label.split(' ')[0] + ' (disabled in this demo)')); break;
       case 'm': case 'space':
         if (S.marks.has(S.cur.ci)) S.marks.delete(S.cur.ci); else S.marks.add(S.cur.ci);
         move(1); break;
@@ -1116,6 +1131,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
   }
   function pickKey(key) {
     const P = S.pick, dest = CH[S.cur.ci];
+    if (S.searchQ && (key === 'n' || key === 'N')) { stepSearch(S.searchQ, key === 'n' ? 1 : -1); return; }
     switch (key) {
       case 'j': case '↓': moveChange(1); return;
       case 'k': case '↑': moveChange(-1); return;
@@ -1170,11 +1186,11 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     if (raw.length === 1) p.value += raw;
   }
   function searchKey(key, raw) {
-    const s = S.search, m = searchMatches(s.query);
+    const s = S.search, q = s.query.trim(), m = searchMatches(q);
     if (key === 'esc') { S.cur = s.origin; closeModal(); return; }
-    if (key === 'enter') { closeModal(); if (s.query.trim() && !m.length) msg('No change matches "' + s.query.trim() + '"', 'err'); return; }
+    if (key === 'enter') { closeModal(); S.searchQ = m.length ? q : null; if (q && !m.length) msg('No change matches "' + q + '"', 'err'); return; }
     const d = ['↓', 'ctrl+n', 'ctrl+j'].includes(key) ? 1 : ['↑', 'ctrl+p', 'ctrl+k'].includes(key) ? -1 : 0;
-    if (d) { const i = nextMatch(m, S.cur.ci, d, false); if (i != null) S.cur = { ci: i, fi: -1 }; return; }
+    if (d) { stepSearch(q, d); return; }
     if (key === 'backspace') s.query = s.query.slice(0, -1);
     else if (raw.length === 1) s.query += raw;
     else return;
@@ -1227,8 +1243,19 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
   suspEl.addEventListener('click', () => { if (S.busy) resume(lastCmd); });
 
   /* ---- rendering ---- */
-  const idHtml = (id, n) => span('c-magb', esc(id.slice(0, n))) + span('c-gry', esc(id.slice(n)));
-  const shaHtml = (sha, n) => span('c-blub', esc(sha.slice(0, n))) + span('c-gry', esc(sha.slice(n)));
+  // An id or sha starting with the search query `q` shows that prefix highlighted.
+  const idHtml = (id, n, q) => q && id.startsWith(q) ? span('c-hl', esc(id.slice(0, q.length))) + span('c-gry', esc(id.slice(q.length)))
+    : span('c-magb', esc(id.slice(0, n))) + span('c-gry', esc(id.slice(n)));
+  const shaHtml = (sha, n, q) => q && sha.startsWith(q) ? span('c-hl', esc(sha.slice(0, q.length))) + span('c-gry', esc(sha.slice(q.length)))
+    : span('c-blub', esc(sha.slice(0, n))) + span('c-gry', esc(sha.slice(n)));
+  // `s` escaped, with every case-insensitive occurrence of `q` highlighted.
+  function hlText(s, q) {
+    if (!q) return esc(s);
+    const lo = s.toLowerCase();
+    let out = '', i = 0, j;
+    while ((j = lo.indexOf(q, i)) >= 0) { out += esc(s.slice(i, j)) + span('c-hl', esc(s.slice(j, j + q.length))); i = j + q.length; }
+    return out + esc(s.slice(i));
+  }
   const graphHtml = g => esc(g).replace(/@/, span('c-grnb', '@')).replace(/◆/, span('c-cyn', '◆')).replace(/○/, span('c-wht', '○'));
   const stColor = { M: 'c-yel', A: 'c-grn', D: 'c-red', R: 'c-cyn', C: 'c-cyn' };
   const L = (html, cls) => '<div class="l' + (cls ? ' ' + cls : '') + '">' + html + '</div>';
@@ -1236,15 +1263,17 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
   function renderLog() {
     const out = [];
     const picking = S.mode === 'pick';
+    const hq = highlightQuery(), matched = new Set(searchMatches(hq));
     CH.forEach((c, ci) => {
       const curC = S.cur.ci === ci && S.cur.fi < 0;
       const cls = curC ? (picking ? 'pcur' : 'cur') : '';
-      const gut = S.marks.has(ci) ? span('c-mark', '●') + ' ' : '  ';
+      const q = matched.has(ci) ? hq : '';
+      const gut = S.marks.has(ci) ? span('c-mark', '●') + ' ' : q ? span('c-mark', '›') + ' ' : '  ';
       const isSrc = picking && S.pick.src.includes(ci);
-      out.push(L(gut + graphHtml(c.g1) + idHtml(c.id, 1) + ' ' + span('c-yel', AUTHOR) + ' ' + span('c-cyn', c.time) +
-        (c.bm.length ? ' ' + span('c-mag', esc(c.bm.join(' '))) : '') + ' ' + shaHtml(c.sha, 1) + (c.conflict ? ' ' + span('c-red', '(conflict)') : '') +
+      out.push(L(gut + graphHtml(c.g1) + idHtml(c.id, 1, q) + ' ' + span('c-yel', AUTHOR) + ' ' + span('c-cyn', c.time) +
+        (c.bm.length ? ' ' + span('c-mag', hlText(c.bm.join(' '), q)) : '') + ' ' + shaHtml(c.sha, 1, q) + (c.conflict ? ' ' + span('c-red', '(conflict)') : '') +
         (isSrc ? ' ' + span('c-tag', 'source') : '') + (curC && picking ? ' ' + span('c-org', '← ' + (S.pick.kind === 'rebase' ? 'destination' : 'target')) : ''), cls));
-      out.push(L('  ' + graphHtml(c.g2) + (c.desc ? (c.wc ? span('c-b', esc(c.desc)) : esc(c.desc)) : span('c-yel', '(no description set)')), cls));
+      out.push(L('  ' + graphHtml(c.g2) + (c.desc ? (c.wc ? span('c-b', hlText(c.desc, q)) : hlText(c.desc, q)) : span('c-yel', '(no description set)')), cls));
       if (S.expanded.has(ci)) c.files.forEach((f, fi) => {
         const curF = S.cur.ci === ci && S.cur.fi === fi;
         out.push(L('  ' + graphHtml(c.g2) + '  ' + span(stColor[f[0]], f[0]) + ' ' + esc(f[2] || f[1]), curF ? 'cur' : ''));
@@ -1325,6 +1354,10 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
       (S.ignoreImm ? '<span class="c-red c-b">--ignore-immutable</span>' : '') +
       '<span>revset: ' + span('c-wht', esc(S.revset || 'default')) + '</span>' +
       '<span>diff: ' + span('c-wht', esc(S.tool)) + '</span>' +
+      (S.searchQ && S.mode !== 'search' ? (() => {
+        const m = searchMatches(S.searchQ), n = m.indexOf(S.cur.ci) + 1;
+        return '<span>' + span('c-mark', '/' + esc(S.searchQ)) + ' ' + span('c-dim', (n || '-') + '/' + m.length) + '</span>';
+      })() : '') +
       (S.help
         ? '<span class="msg">' + (S.help.typing ? 'type to filter · enter done · esc clear'
             : S.help.query ? '/ edit search · j/k scroll · esc clear · q close' : '/ search · j/k scroll · esc/q/? close') + '</span>'

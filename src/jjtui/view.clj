@@ -50,6 +50,52 @@
         s (fit (str on s) width)]
     (str s on (apply str (repeat (max 0 (- width (width-of s))) " ")) reset)))
 
+(def ^:private match-on (str reset (sgr 30 43)))
+
+(defn highlight
+  "Paints every case-insensitive occurrence of `query` in the visible text of
+   `line`, restoring the line's own styles after each one."
+  [line query]
+  (let [q (str/lower-case query)
+        tokens (re-seq #"\u001b\[[0-9;]*m|(?s:.)" line)
+        style? #(str/starts-with? % "\u001b")
+        chars (mapv str/lower-case (remove style? tokens))
+        text (apply str chars)
+        starts (vec (reductions + 0 (map count chars)))
+        hits (if (str/blank? q)
+               #{}
+               (loop [from 0 hits #{}]
+                 (if-let [at (str/index-of text q from)]
+                   (recur (+ at (count q))
+                          (into hits (filter #(<= at (starts %) (+ at (count q) -1))) (range (count chars))))
+                   hits)))]
+    (if (empty? hits)
+      line
+      (let [{:keys [out active on?]}
+            (reduce (fn [{:keys [out active on? i] :as acc} t]
+                      (if (style? t)
+                        (assoc acc
+                               :out (cond-> (conj out t) on? (conj match-on))
+                               :active (if (re-matches #"\u001b\[0?m" t) [] (conj active t)))
+                        (let [hit? (contains? hits i)]
+                          (assoc acc
+                                 :out (conj (cond-> out
+                                              (and hit? (not on?)) (conj match-on)
+                                              (and on? (not hit?)) (into (cons reset active)))
+                                            t)
+                                 :on? hit?
+                                 :i (inc i)))))
+                    {:out [] :active [] :on? false :i 0}
+                    tokens)]
+        (apply str (cond-> out on? (into (cons reset active))))))))
+
+(defn- match-count
+  "\"2/5\": where the cursor's change is among the `matches` (entry indices)."
+  [state matches]
+  (let [current (:change/index (st/cursor-entry state))]
+    (str (or (first (keep-indexed (fn [i m] (when (= m current) (inc i))) matches)) "-")
+         "/" (count matches))))
+
 ;; ---------------------------------------------------------------------------
 ;; Layout
 
@@ -113,15 +159,13 @@
 
       :search
       (let [query (ti/value input)
-            matches (st/search-matches state query)
-            current (:change/index (st/cursor-entry state))
-            nth-match (first (keep-indexed (fn [i m] (when (= m current) (inc i))) matches))]
+            matches (st/search-matches state query)]
         [(separator state "Search changes")
          (str "  " (ti/text-input-view input) "  "
               (dim (cond
                      (str/blank? query) ""
                      (empty? matches) "no matches"
-                     :else (str (or nth-match "-") "/" (count matches)))))])
+                     :else (match-count state matches))))])
 
       (when-let [lines (message-lines state)]
         (cons (separator state "Message")
@@ -198,6 +242,8 @@
         pal (palette state)
         block (if cursor-idx (block-of rows cursor-idx) #{})
         {:repo/keys [marks offset loading?]} (:app/repo state)
+        query (st/search-query state)
+        matched (set (st/search-matches state query))
         sources (set (when (= :pick (:mode/type mode)) (:mode/sources mode)))
         visible (take height (drop offset (map-indexed vector rows)))]
     (cond
@@ -206,6 +252,7 @@
       :else
       (for [[i row] visible]
         (let [id (:change/id (st/row-entry state row))
+              match? (contains? matched (:row/entry row))
               node? (= :node (:row/kind row))
               cursor? (= i cursor-idx)
               in-block? (contains? block i)
@@ -213,8 +260,12 @@
                           (cond
                             (and node? (contains? sources id)) (fg 3 "◆")
                             (and node? (contains? marks id)) (fg 5 "●")
+                            (and node? match?) (fg 3 "›")
                             :else " "))
-              content (if (= :file (:row/kind row)) (file-line row) (:row/line row))
+              content (case (:row/kind row)
+                        :file (file-line row)
+                        (:node :text) (cond-> (:row/line row) match? (highlight query))
+                        (:row/line row))
               line (str gutter content)]
           (cond
             cursor? (with-bg line (:cursor pal) width)
@@ -274,11 +325,14 @@
                msg (if (= :error level) (fg 1 text) text)
                (= :no-repo type) (dim "j/k move · enter or key select · q quit")
                (get-in state [:app/repo :repo/loading?]) (dim "loading…")
+               (get-in state [:app/repo :repo/search]) (dim "n/N next/prev match · esc clear search · ? help")
                :else (dim "? help"))
-        {:repo/keys [marks ignore-immutable? revset]} (:app/repo state)
+        {:repo/keys [marks ignore-immutable? revset search]} (:app/repo state)
         right (str/join "  "
                         (remove nil?
-                                [(when (seq marks) (fg 5 (str "● " (count marks) " marked")))
+                                [(when (and search (not= :search type))
+                                   (str (fg 3 (str "/" search)) " " (dim (match-count state (st/search-matches state search)))))
+                                 (when (seq marks) (fg 5 (str "● " (count marks) " marked")))
                                  (when ignore-immutable? (fg 1 "!immutable"))
                                  (when revset (str (dim "revset ") revset))
                                  (str (dim "diff ") (name (:app/diff-tool state)))]))
@@ -302,6 +356,7 @@
                            [(str/join " " (map keys/display-key ks)) desc])])
                 [["Modes" [["help" "/ search, enter done, esc clear"]
                            ["search" "type to jump, ↑/↓ next/prev match, enter keep, esc back"]
+                           ["search active" "n/N next/prev match, / edit query, esc clear"]
                            ["pick" "j/k move, enter select, esc cancel"]
                            ["rebase pick" "a after, b before, s source mode"]
                            ["picker" "type to filter, ↑/↓, enter, esc"]

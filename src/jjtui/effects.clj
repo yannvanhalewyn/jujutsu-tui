@@ -46,6 +46,9 @@
                              [:type [:= :msg/description-loaded]]
                              [:msg/change-id :string]
                              [:msg/result jj/Description]]]
+   [:msg/workspaces-loaded [:map
+                            [:type [:= :msg/workspaces-loaded]]
+                            [:msg/result jj/Workspaces]]]
    [:msg/diff-resolved [:map
                         [:type [:= :msg/diff-resolved]]
                         [:msg/result [:or st/DiffTarget jj/Failure]]]]
@@ -74,6 +77,7 @@
    [:jj JjEffect]
    [:bookmarks [:map [:fx/type [:= :bookmarks]] [:fx/purpose BookmarkPurpose]]]
    [:description [:map [:fx/type [:= :description]] [:fx/change-id :string]]]
+   [:workspaces [:map [:fx/type [:= :workspaces]]]]
    [:resolve-diff [:map [:fx/type [:= :resolve-diff]] [:fx/target st/DiffTarget]]]
    [:debounce [:map [:fx/type [:= :debounce]] [:fx/ms :int] [:fx/msg Msg]]]
    [:preview [:map [:fx/type [:= :preview]] [:fx/key st/PreviewKey]]]
@@ -120,7 +124,7 @@
 
 (defn- effect->cmd [state effect]
   (let [dir (get-in state [:app/repo :repo/dir])
-        log-template (get-in state [:app/config :log-template])]
+        log-template (get-in state [:app/config :config/log-template])]
     (case (:fx/type effect)
       :quit program/quit-cmd
 
@@ -147,6 +151,10 @@
       :resolve-diff
       (program/cmd #(hash-map :type :msg/diff-resolved
                               :msg/result (resolve-diff dir (:fx/target effect))))
+
+      :workspaces
+      (program/cmd #(hash-map :type :msg/workspaces-loaded
+                              :msg/result (jj/workspaces dir)))
 
       :debounce
       (program/cmd (fn [] (Thread/sleep (long (:fx/ms effect))) (:fx/msg effect)))

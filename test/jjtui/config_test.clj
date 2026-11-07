@@ -38,6 +38,16 @@
     (is (= ["my-tool" "$revset"] (get-in merged [:diff-tools :mine])))
     (is (contains? (:diff-tools merged) :difftastic) "built-in tools are kept")))
 
-(deftest tool-spec-test
-  (is (= {:cmd ["x"] :wait? false} (config/tool-spec ["x"])))
-  (is (= {:cmd "x" :wait? true} (config/tool-spec {:cmd "x" :wait? true}))))
+(deftest user->internal-test
+  (let [cfg (config/user->internal
+             (config/merge-config {:diff-tools {:str "tool $files"
+                                                :vec ["tool" "$files"]
+                                                :map {:cmd ["tool"] :wait? true}}
+                                   :show-files :yes}))]
+    (testing "every diff tool form becomes a :tool/ map"
+      (is (= {:tool/cmd "tool $files" :tool/wait? false} (get-in cfg [:config/diff-tools :str])))
+      (is (= {:tool/cmd ["tool" "$files"] :tool/wait? false} (get-in cfg [:config/diff-tools :vec])))
+      (is (= {:tool/cmd ["tool"] :tool/wait? true} (get-in cfg [:config/diff-tools :map]))))
+    (testing "flags are coerced to booleans"
+      (is (true? (:config/show-files? cfg)))
+      (is (false? (:config/split? cfg))))))

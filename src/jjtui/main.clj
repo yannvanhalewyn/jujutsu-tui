@@ -85,7 +85,7 @@ Press ? inside the TUI for keybindings.")
   (let [[kind found] (repo/find-start cwd)
         init #(app/init-state (merge {:config config :config-error config-error} %))]
     (case kind
-      :open (let [opened (repo/open found (:log-template config))]
+      :open (let [opened (repo/open found (:config/log-template config))]
               (when-let [err (:jj/error opened)] (fail! err))
               (init {:repo opened}))
       :choose (let [{:keys [git-root parent]} found
@@ -110,7 +110,7 @@ Press ? inside the TUI for keybindings.")
 
       :else
       (let [{:keys [config error]} (config/load-config (:config opts))
-            config (cond-> config (:revset opts) (assoc :revset (:revset opts)))]
+            config (cond-> config (:revset opts) (assoc :config/revset (:revset opts)))]
         (loop [step (app/start (start-state (System/getProperty "user.dir") config error))]
           (let [state (run-program step)]
             (when-let [exec (:app/exec state)]

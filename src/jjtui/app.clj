@@ -23,8 +23,8 @@
   [config {:repo/keys [dir base-template]}]
   {:repo/dir dir
    :repo/base-template base-template
-   :repo/revset (:revset config)
-   :repo/good-revset (:revset config)
+   :repo/revset (:config/revset config)
+   :repo/good-revset (:config/revset config)
    :repo/log {:log/entries [] :log/rows []}
    :repo/loading? true
    :repo/cursor nil
@@ -32,6 +32,7 @@
    :repo/offset 0
    :repo/marks #{}
    :repo/expanded #{}
+   :repo/search nil
    :repo/preview nil
    :repo/preview-cache {}
    :repo/ignore-immutable? false})
@@ -43,10 +44,10 @@
   {:app/config config
    :app/repo (some->> repo (repo-state config))
    :app/log-gen 0
-   :app/show-files? (boolean (:show-files config))
-   :app/split? (boolean (:split config))
-   :app/split-ratio (:split-ratio config)
-   :app/diff-tool (:diff-tool config)
+   :app/show-files? (:config/show-files? config)
+   :app/split? (:config/split? config)
+   :app/split-ratio (:config/split-ratio config)
+   :app/diff-tool (:config/diff-tool config)
    :app/mode mode
    :app/message (when config-error {:message/text config-error :message/level :error})
    :app/busy nil
@@ -186,11 +187,20 @@
      clear-marks? (update-repo assoc :repo/marks #{}))
    [{:fx/type :quit}]])
 
+(defn- open-repo
+  "Opens the jj repo at `dir` (`op` :open), or sets jj up there first
+   (:init), replacing the open repo once it's ready."
+  [state op dir]
+  (if (:app/busy state)
+    [(error state (str "Busy: " (:app/busy state))) []]
+    [(assoc state :app/busy (if (= :init op) (str "Setting up jj in " dir) (str "Opening " dir)))
+     [{:fx/type (if (= :init op) :init-repo :open-repo) :fx/dir dir}]]))
+
 ;; ---------------------------------------------------------------------------
 ;; Diffs
 
-(defn- tool-spec [state]
-  (config/tool-spec (get-in state [:app/config :diff-tools (:app/diff-tool state)])))
+(defn- active-tool [state]
+  (get-in state [:app/config :config/diff-tools (:app/diff-tool state)]))
 
 (defn- change-target
   "The diff of one change, optionally limited to some files."
@@ -238,7 +248,7 @@
   "Opens `target` in the active diff tool, first asking jj for the commit ids
    when the tool needs them and they aren't known yet."
   [state target]
-  (let [{:keys [cmd wait?]} (tool-spec state)
+  (let [{:tool/keys [cmd wait?]} (active-tool state)
         needs-shas? (or (config/uses-var? cmd "from-sha") (config/uses-var? cmd "to-sha"))]
     (cond
       (nil? cmd)
@@ -264,7 +274,7 @@
   "[argv width] of the preview the cursor wants, or nil."
   [state]
   (when-let [target (and (:app/split? state) (cursor-entry state) (diff-target state))]
-    (let [cmd (get-in state [:app/config :preview-command])
+    (let [cmd (get-in state [:app/config :config/preview-command])
           width (preview-width state)
           target (if (seq (marked-entries state))
                    ;; The pane follows the cursor, not the marks
@@ -419,6 +429,31 @@
 (defn- ensure-split [state]
   (if (:app/split? state) state (info state "Split pane is closed, press | to open it")))
 
+;; ---------------------------------------------------------------------------
+;; Search
+
+(defn- next-match
+  "The match after entry index `from` going `dir` (1 or -1), wrapping around;
+   `from` itself counts when `here?`."
+  [matches from dir here?]
+  (let [after? (if (pos? dir) (if here? >= >) (if here? <= <))
+        candidates (if (pos? dir) matches (rseq matches))]
+    (or (first (filter #(after? % from) candidates)) (first candidates))))
+
+(defn- goto-entry [state i]
+  (if-let [entry (get (entries state) i)]
+    (assoc-in state [:app/repo :repo/cursor] (change-cursor entry))
+    state))
+
+(defn- step-search
+  "Moves the cursor to the next (`dir` 1) or previous (-1) change matching
+   `query`, wrapping around."
+  [state query dir]
+  (let [matches (search-matches state query)]
+    (if (empty? matches)
+      (error state (str "No change matches " (pr-str (str/trim (str query)))))
+      (goto-entry state (next-match matches (or (:change/index (cursor-entry state)) 0) dir false)))))
+
 (defn perform
   "Runs a normal-mode action."
   [state action]
@@ -434,10 +469,14 @@
       [(assoc-in state [:app/repo :repo/cursor] (change-cursor wc)) []]
       [(error state "The working copy is not in this revset") []])
     :refresh (reload state)
+    :workspace/switch [(info state "Loading workspaces…") [{:fx/type :workspaces}]]
     :search [(assoc state :app/mode {:mode/type :search
-                                     :mode/input (input "" "/")
+                                     :mode/input (input (get-in state [:app/repo :repo/search]) "/")
                                      :mode/origin (get-in state [:app/repo :repo/cursor])})
              []]
+    :search/next [(step-search state (get-in state [:app/repo :repo/search]) 1) []]
+    :search/prev [(step-search state (get-in state [:app/repo :repo/search]) -1) []]
+    :search/clear [(update-repo state assoc :repo/search nil) []]
     :help [(assoc state :app/mode {:mode/type :help :mode/offset 0
                                    :mode/search (ti/text-input :prompt "/" :focused false)})
            []]
@@ -463,7 +502,7 @@
     :diff/branch [(info state "Loading bookmarks…") [{:fx/type :bookmarks :fx/purpose :branch-diff}]]
     :diff/pick-tool
     [(open-picker state :diff-tool "Diff tool"
-                  (vec (for [k (sort (keys (get-in state [:app/config :diff-tools])))]
+                  (vec (for [k (sort (keys (get-in state [:app/config :config/diff-tools])))]
                          {:item/label (str (name k) (when (= k (:app/diff-tool state)) "  (current)"))
                           :item/value k})))
      []]
@@ -597,6 +636,7 @@
       :diff-tool [(info (assoc state :app/diff-tool value) (str "Diff tool: " (name value))) []]
       :branch-diff (open-diff state (branch-target value))
       :bookmark-op (bookmark-chosen state op value)
+      :workspace (open-repo state :open value)
       :bookmark-set
       (with-entry state
         (fn [entry]
@@ -691,10 +731,7 @@
          (take 9 recent))})
 
 (defn- choose [state {[op dir] :choice/action}]
-  (if (:app/busy state)
-    [state []]
-    [(assoc state :app/busy (if (= :init op) (str "Setting up jj in " dir) (str "Opening " dir)))
-     [{:fx/type (if (= :init op) :init-repo :open-repo) :fx/dir dir}]]))
+  (open-repo state op dir))
 
 (defn- handle-chooser-key [state k]
   (let [{:mode/keys [choices selected]} (:app/mode state)
@@ -726,8 +763,15 @@
     :cursor/working-copy :preview/down :preview/up :preview/page-down :preview/page-up
     :split/toggle :files/toggle :files/toggle-all :split/shrink :split/grow :help})
 
+(defn- search-action
+  "What `k` does to the active search, if there is one."
+  [state k]
+  (when (get-in state [:app/repo :repo/search])
+    (get keys/search-keymap k)))
+
 (defn- handle-pick-key [state k]
   (let [action (get keys/keymap k)
+        search-step (#{:search/next :search/prev} (search-action state k))
         rebase? (= :rebase (get-in state [:app/mode :mode/action]))]
     (cond
       (#{"escape" "q"} k) [(info (assoc state :app/mode nil) "Cancelled") []]
@@ -736,6 +780,7 @@
       (and rebase? (= "b" k)) (finish-pick state "-B")
       (and rebase? (= "s" k))
       [(update-in state [:app/mode :mode/source-flag] {"-r" "-s" "-s" "-b" "-b" "-r"}) []]
+      search-step (perform state search-step)
       (contains? nav-actions action) (perform state action)
       :else [state []])))
 
@@ -764,36 +809,23 @@
       flag [(update-in state [:app/mode :mode/flags] #(if (contains? % flag) (disj % flag) (conj % flag))) []]
       :else (menu-choice state mode option))))
 
-(defn- next-match
-  "The match after entry index `from` going `dir` (1 or -1), wrapping around;
-   `from` itself counts when `here?`."
-  [matches from dir here?]
-  (let [after? (if (pos? dir) (if here? >= >) (if here? <= <))
-        candidates (if (pos? dir) matches (rseq matches))]
-    (or (first (filter #(after? % from) candidates)) (first candidates))))
-
-(defn- goto-entry [state i]
-  (if-let [entry (get (entries state) i)]
-    (assoc-in state [:app/repo :repo/cursor] (change-cursor entry))
-    state))
-
 (defn- handle-search-key
   "Typing jumps to the first match from where the search started, ↑/↓ step
-   through the matches, enter keeps the cursor there and escape goes back."
+   through the matches, enter makes it the active search and escape goes
+   back, leaving the active search as it was."
   [state k msg]
   (let [{:mode/keys [input origin]} (:app/mode state)
-        query (ti/value input)
-        restore #(assoc-in % [:app/repo :repo/cursor] origin)
-        step #(goto-entry state (next-match (search-matches state query)
-                                            (or (:change/index (cursor-entry state)) 0) % false))]
+        query (str/trim (ti/value input))
+        restore #(assoc-in % [:app/repo :repo/cursor] origin)]
     (cond
       (= "escape" k) [(restore (assoc state :app/mode nil)) []]
-      (= "enter" k) [(cond-> (assoc state :app/mode nil)
-                       (and (not (str/blank? query)) (empty? (search-matches state query)))
-                       (error (str "No change matches " (pr-str (str/trim query)))))
-                     []]
-      (#{"down" "ctrl+n" "ctrl+j"} k) [(step 1) []]
-      (#{"up" "ctrl+p" "ctrl+k"} k) [(step -1) []]
+      (= "enter" k) (let [found? (seq (search-matches state query))]
+                      [(cond-> (update-repo (assoc state :app/mode nil) assoc :repo/search (when found? query))
+                         (and (not found?) (not (str/blank? query)))
+                         (error (str "No change matches " (pr-str query))))
+                       []])
+      (#{"down" "ctrl+n" "ctrl+j"} k) [(step-search state query 1) []]
+      (#{"up" "ctrl+p" "ctrl+k"} k) [(step-search state query -1) []]
       :else
       (let [[in _] (ti/text-input-update input msg)
             state (restore (assoc-in state [:app/mode :mode/input] in))
@@ -841,7 +873,7 @@
                (= "enter" k) (input-submitted state mode)
                :else (let [[in _] (ti/text-input-update (:mode/input mode) msg)]
                        [(assoc-in state [:app/mode :mode/input] in) []]))
-      (if-let [action (get keys/keymap k)]
+      (if-let [action (or (search-action state k) (get keys/keymap k))]
         (perform state action)
         [state []]))))
 
@@ -901,6 +933,21 @@
            (open-picker purpose (if set? "Set bookmark (type a new name to create)" "Diff branch") items))
        []])))
 
+(defn- workspaces-loaded
+  "Offers the repo's other workspaces; picking one opens it like any repo."
+  [state {:msg/keys [result]}]
+  (if-let [err (:jj/error result)]
+    [(error state err) []]
+    (let [others (remove #(= (get-in state [:app/repo :repo/dir]) (:workspace/root %))
+                         (:jj/workspaces result))]
+      (if (empty? others)
+        [(info state "No other workspaces") []]
+        [(open-picker (assoc state :app/message nil) :workspace "Switch workspace"
+                      (vec (for [{:workspace/keys [name root change description]} others]
+                             {:item/label (str name "  " change "  " description)
+                              :item/value root})))
+         []]))))
+
 (defn after-exec
   "Called by the main loop once an interactive command finished."
   [state {:keys [exit]}]
@@ -927,6 +974,7 @@
           :msg/log-loaded (log-loaded state msg)
           :msg/jj-done (jj-done state msg)
           :msg/bookmarks-loaded (bookmarks-loaded state msg)
+          :msg/workspaces-loaded (workspaces-loaded state msg)
           :msg/description-loaded (description-loaded state msg)
           :msg/repo-opened (repo-opened state msg)
           :msg/diff-resolved (let [result (:msg/result msg)]

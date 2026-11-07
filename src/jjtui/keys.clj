@@ -24,6 +24,7 @@
      [["ctrl+u"] :cursor/half-up "Half page up"]
      [["@"] :cursor/working-copy "Jump to working copy"]
      [["/"] :search "Search change ids, commit ids, descriptions"]
+     [["w"] :workspace/switch "Switch workspace (picker)"]
      [["R" "ctrl+r"] :refresh "Refresh"]
      [["?"] :help "Help"]
      [["q"] :quit "Quit"]]]
@@ -46,7 +47,7 @@
     [[["m" "space"] :mark/toggle "Toggle mark"]
      [["c" "escape"] :mark/clear "Clear marks"]]]
    ["Changes"
-    [[["d"] :describe "Describe (popup, ctrl+e for $EDITOR)"]
+    [[["d"] :describe "Describe"]
      [["n"] :new "New change (merge if marked)"]
      [["N"] :new-menu "New… (after / before)"]
      [["e"] :edit "Edit change"]
@@ -74,6 +75,11 @@
               [ks action] bindings
               k ks]
           [k action])))
+
+(def search-keymap
+  "Keys acting on the active search, ahead of the keymap: without one, n and
+   N create changes and escape clears the marks."
+  {"n" :search/next "N" :search/prev "escape" :search/clear})
 
 (def pick-help
   {:rebase "enter/o onto · a after · b before · s source mode · esc cancel"

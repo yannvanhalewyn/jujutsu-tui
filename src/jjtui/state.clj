@@ -5,10 +5,12 @@
    Every map key is namespaced by the thing it describes (:app/ for the
    session, :repo/ for the open repo, :mode/, :preview/, :change/ …), so the
    same name in two shapes can't be confused. Enum values and function
-   options stay unqualified."
+   options stay unqualified. :app/config is the internal jjtui.config/Config,
+   not the user's unqualified config.edn shape."
   (:require
    [charm.components.text-input :as ti]
    [clojure.string :as str]
+   [jjtui.config :as config]
    [jjtui.log :as log]))
 
 ;; ---------------------------------------------------------------------------
@@ -59,7 +61,7 @@
            [:mode/source-flag [:enum "-r" "-s" "-b"]]]]
    [:picker [:map
              [:mode/type [:= :picker]]
-             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set]]
+             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set :workspace]]
              [:mode/title :string]
              [:mode/items [:vector PickerItem]]
              [:mode/selected :int]
@@ -150,6 +152,7 @@
    [:repo/offset {:doc "First visible log row"} :int]
    [:repo/marks [:set :string]]
    [:repo/expanded {:doc "Change ids whose files are shown"} [:set :string]]
+   [:repo/search {:doc "Query of the active search: highlighted, n/N step through it"} [:maybe :string]]
    [:repo/preview [:maybe Preview]]
    [:repo/preview-cache [:map-of PreviewKey [:vector :string]]]
    [:repo/ignore-immutable? {:doc "Per repo, so it never carries over by surprise"} :boolean]])
@@ -158,7 +161,7 @@
   "The session (terminal, preferences, modes) and the open repo."
   [:and
    [:map {:closed true}
-    [:app/config [:map]]
+    [:app/config config/Config]
     [:app/repo {:doc "nil while the user picks one"} [:maybe Repo]]
     [:app/log-gen {:doc "Bumped per load, across repos; stale results are dropped"} :int]
     [:app/show-files? :boolean]
@@ -231,7 +234,7 @@
    change or commit id starting with it, or a description containing it,
    ignoring case."
   [state query]
-  (let [q (str/lower-case (str/trim query))]
+  (let [q (str/lower-case (str/trim (str query)))]
     (if (str/blank? q)
       []
       (into []
@@ -241,6 +244,13 @@
                               (str/includes? (str/lower-case full-description) q))
                       index)))
             (entries state)))))
+
+(defn search-query
+  "The query to highlight: the one being typed, else the active search."
+  [state]
+  (if (= :search (get-in state [:app/mode :mode/type]))
+    (str/trim (ti/value (get-in state [:app/mode :mode/input])))
+    (get-in state [:app/repo :repo/search])))
 
 ;; ---------------------------------------------------------------------------
 ;; Pickers
