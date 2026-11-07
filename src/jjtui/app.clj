@@ -236,12 +236,30 @@
       (let [{:file/keys [source path] :as file} (:row/file row)]
         (change-target entry (if file (vec (distinct (remove nil? [source path]))) []))))))
 
-(defn- branch-target [bookmark-ref]
-  {:target/revset (str "fork_point(trunk() | " bookmark-ref ").." bookmark-ref)
-   :target/files []
-   :target/from-rev (str "fork_point(trunk() | " bookmark-ref ")")
-   :target/from-commit? true
-   :target/to-rev bookmark-ref})
+(defn- branch-target
+  "The whole branch `ref` since its fork point with `base`, like a PR."
+  [base ref]
+  (let [fork (str "fork_point(" base " | " ref ")")]
+    {:target/revset (str fork ".." ref)
+     :target/files []
+     :target/from-rev fork
+     :target/from-commit? true
+     :target/to-rev ref}))
+
+(defn- change-base-item [{:change/keys [short-id commit-id description] :as entry}]
+  {:item/label (str short-id "  " (subs commit-id 0 (min 8 (count commit-id))) "  "
+                    (if (str/blank? description) "(no description set)" description))
+   :item/value commit-id
+   :item/change entry})
+
+(defn- base-items
+  "What the branch `ref` can be diffed against, the default first: trunk, the
+   other bookmarks (`bookmark-items`, those of the branch picker), then the
+   loaded changes."
+  [state ref bookmark-items]
+  (-> [{:item/label "trunk()" :item/detail "default" :item/value "trunk()"}]
+      (into (remove #(= ref (:item/value %))) bookmark-items)
+      (into (map change-base-item) (entries state))))
 
 (defn diff-vars [state target]
   {"revset" (:target/revset target)
@@ -587,7 +605,12 @@
                     (squash state [entry] (entry-by-commit state (first (:change/parents entry)))
                             ["squash" "-r" (:change/id entry)])))))
     :squash-into (start-pick state :squash-into (targets state))
-    :rebase (start-pick state :rebase (targets state))
+    :rebase (let [[state' fx] (start-pick state :rebase (targets state))]
+              ;; Like a chained r: step past the change just made a source
+              [(cond-> state'
+                 (some #{(:change/id (cursor-entry state'))} (get-in state' [:app/mode :mode/sources]))
+                 next-change)
+               fx])
     :split-change (with-entry state #(run-exec state (ignore-immutable state ["jj" "split" "-r" (:change/id %)])))
     :resolve (with-entry state
                (fn [entry]
@@ -659,11 +682,14 @@
                         :mode/op op)
            []])))))
 
-(defn- picker-choice [state {:mode/keys [purpose op]} {:item/keys [value create?]}]
+(defn- picker-choice [state {:mode/keys [purpose op items source]} {:item/keys [value create?]}]
   (let [state (assoc state :app/mode nil)]
     (case purpose
       :diff-tool [(info (assoc state :app/diff-tool value) (str "Diff tool: " (name value))) []]
-      :branch-diff (open-diff state (branch-target value))
+      :branch-diff [(open-picker state :branch-base (str "Diff " value " from its fork point with")
+                                 (base-items state value items) :mode/source value)
+                    []]
+      :branch-base (open-diff state (branch-target value source))
       :bookmark-op (bookmark-chosen state op value)
       :repo (open-repo state :open value)
       :push (run-jj state ["git" "push" "-b" value] {:label "Pushing"})

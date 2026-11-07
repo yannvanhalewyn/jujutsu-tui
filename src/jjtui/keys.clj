@@ -41,7 +41,7 @@
      [["L"] :revset/set "Set log revset"]]]
    ["Diff"
     [[["enter"] :diff/open "Diff change / marks / file"]
-     [["D"] :diff/branch "Diff a branch (picker)"]
+     [["D"] :diff/branch "Diff a branch from a picked base (trunk by default)"]
      [["v"] :diff/pick-tool "Pick diff tool"]]]
    ["Marks"
     [[["m" "space"] :mark/toggle "Toggle mark"]

@@ -118,9 +118,11 @@
       (is (= "bbbb" (cursor-id (first (press s "n" "n")))))
       (is (= "aaaa" (cursor-id (first (press s "N"))))))
     (testing "n and N also move while picking a target"
-      (let [[s'] (press s "r" "n")]
-        (is (= :pick (get-in s' [:app/mode :mode/type])))
-        (is (= "aaaa" (cursor-id s')))))
+      (let [[s'] (press s "r")
+            [s''] (press s' "n")]
+        (is (= :pick (get-in s'' [:app/mode :mode/type])))
+        (is (= "aaaa" (cursor-id s')) "r steps past the source")
+        (is (= "bbbb" (cursor-id s'')) "n wraps to the first match")))
     (testing "/ starts from the active query; escape keeps it"
       (is (= "b" (ti/value (get-in (first (press s "/")) [:app/mode :mode/input]))))
       (is (= "b" (get-in (first (press s "/" "x" "escape")) [:app/repo :repo/search])))
@@ -156,22 +158,29 @@
         (is (empty? (get-in (first (press s "escape")) [:app/repo :repo/marks])))))))
 
 (deftest rebase-pick-test
-  (let [[s] (press (loaded) "r")]
+  (let [[s] (press (loaded) "r")
+        cursor-id #(:change/id (st/cursor-entry %))]
     (is (= :pick (get-in s [:app/mode :mode/type])))
+    (testing "r makes the cursor's change the source and steps to the next change"
+      (is (= ["wwww"] (get-in s [:app/mode :mode/sources])))
+      (is (= "bbbb" (cursor-id s))))
+    (testing "with marks the cursor isn't a source, so it stays"
+      (let [[s] (press (loaded) "j" "j" "j" "m" "g" "r")]
+        (is (= ["aaaa"] (get-in s [:app/mode :mode/sources])))
+        (is (= "wwww" (cursor-id s)))))
     (testing "s cycles the source mode, a inserts after the target"
-      (let [[s fx] (press s "s" "j" "j" "j" "a")]
+      (let [[s fx] (press s "s" "j" "j" "a")]
         (is (nil? (:app/mode s)))
         (is (= ["rebase" "-s" "wwww" "-A" "aaaa"] (jj-args fx)))))
     (testing "enter rebases onto the target"
       (let [[_ fx] (press s "G" "enter")]
         (is (= ["rebase" "-r" "wwww" "-d" "mmmm"] (jj-args fx)))))
     (testing "can't rebase onto a source"
-      (let [[s fx] (press s "enter")]
+      (let [[s fx] (press s "g" "enter")]
         (is (empty? fx))
         (is (= :error (get-in s [:app/message :message/level])))))
-    (testing "r adds the cursor's change to the sources and steps past its files to the next change"
-      (let [[s] (press s "j" "r")
-            cursor-id #(:change/id (st/cursor-entry %))]
+    (testing "chained r adds the cursor's change to the sources and steps past its files to the next change"
+      (let [[s] (press s "r")]
         (is (= ["wwww" "bbbb"] (get-in s [:app/mode :mode/sources])))
         (is (= "aaaa" (cursor-id s)))
         (testing "the source flag applies to each"
@@ -302,6 +311,26 @@
    :bookmark/tracked? (boolean (and remote tracked?))
    :bookmark/synced? synced?
    :bookmark/description "d"})
+
+(deftest branch-diff-test
+  (let [[s] (press (loaded) "D" {:type :msg/bookmarks-loaded
+                                 :msg/purpose :branch-diff
+                                 :msg/result {:jj/bookmarks [(bookmark "feat" nil) (bookmark "main" nil) (bookmark "main" "origin")]}})
+        [s] (press s "f" "e" "a" "t" "enter")
+        values #(map :item/value (st/picker-matches (:app/mode (first (apply press s %)))))
+        revset #(some (fn [arg] (when (str/starts-with? arg "fork_point") arg))
+                      (get-in (first (apply press s %)) [:app/exec :exec/argv]))]
+    (testing "picking the branch offers its base: trunk, the other bookmarks, then the loaded changes"
+      (is (= ["trunk()" "main" "main@origin" "cw" "cb" "ca" "cm"] (values []))))
+    (testing "enter right away diffs from the fork point with trunk"
+      (is (= "fork_point(trunk() | feat)..feat" (revset ["enter"]))))
+    (testing "another bookmark can be the base"
+      (is (= "fork_point(main | feat)..feat" (revset ["m" "a" "i" "n" "enter"]))))
+    (testing "the query greps changes like / does: change id, commit id or description"
+      (is (= ["ca"] (values ["a" "a"])))
+      (is (= ["cb"] (values ["c" "b"])))
+      (is (= ["ca"] (values ["l" "o" "g" "i" "n"])))
+      (is (= "fork_point(ca | feat)..feat" (revset ["c" "a" "enter"]))))))
 
 (deftest bookmark-picker-test
   (let [[s] (press (loaded) "b")

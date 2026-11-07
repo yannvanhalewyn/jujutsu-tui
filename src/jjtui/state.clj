@@ -29,10 +29,11 @@
 
 (def PickerItem
   [:map
-   [:item/label {:doc "What the query matches"} :string]
+   [:item/label {:doc "What the query matches, unless the item is a change"} :string]
    [:item/detail {:optional true :doc "Shown dimmed after the label, not matched"} :string]
    [:item/value any?]
-   [:item/create? {:optional true} :boolean]])
+   [:item/create? {:optional true} :boolean]
+   [:item/change {:optional true :doc "A change the query greps like / does, instead of fuzzy matching the label"} log/Entry]])
 
 (def MenuOption
   [:map
@@ -62,12 +63,13 @@
            [:mode/source-flag [:enum "-r" "-s" "-b"]]]]
    [:picker [:map
              [:mode/type [:= :picker]]
-             [:mode/purpose [:enum :diff-tool :branch-diff :bookmark-op :bookmark-set :push :pull :repo]]
+             [:mode/purpose [:enum :diff-tool :branch-diff :branch-base :bookmark-op :bookmark-set :push :pull :repo]]
              [:mode/title :string]
              [:mode/items [:vector PickerItem]]
              [:mode/selected :int]
              [:mode/input TextInput]
-             [:mode/op {:optional true} [:enum :delete :rename]]]]
+             [:mode/op {:optional true} [:enum :delete :rename]]
+             [:mode/source {:optional true :doc "The bookmark being diffed, while picking its base"} :string]]]
    [:menu [:map
            [:mode/type [:= :menu]]
            [:mode/purpose [:enum :new :bookmark]]
@@ -230,6 +232,14 @@
 ;; ---------------------------------------------------------------------------
 ;; Search
 
+(defn- change-match
+  "How the trimmed, lower case `q` matches the change: :id when its change or
+   commit id starts with q, :description when its description contains q."
+  [q {:change/keys [id commit-id full-description]}]
+  (cond
+    (or (str/starts-with? id q) (str/starts-with? commit-id q)) :id
+    (str/includes? (str/lower-case full-description) q) :description))
+
 (defn search-matches
   "Indices into :log/entries of the changes matching `query`, in log order: a
    change or commit id starting with it, or a description containing it,
@@ -239,11 +249,7 @@
     (if (str/blank? q)
       []
       (into []
-            (keep (fn [{:change/keys [index id commit-id full-description]}]
-                    (when (or (str/starts-with? id q)
-                              (str/starts-with? commit-id q)
-                              (str/includes? (str/lower-case full-description) q))
-                      index)))
+            (keep #(when (change-match q %) (:change/index %)))
             (entries state)))))
 
 (defn search-query
@@ -283,11 +289,25 @@
     (str/includes? (str/lower-case (or (last (str/split dir #"/")) "")) (str/lower-case query)) 0
     :else 1))
 
+(defn- item-score
+  "Score of `query` against the item, lower is better; nil when it doesn't
+   match. A change matching by id ranks like a label starting with the query,
+   one matching by description after any label containing it."
+  [query item]
+  (if-let [change (:item/change item)]
+    (if (str/blank? query)
+      0
+      (case (change-match (str/lower-case query) change)
+        :id 0
+        :description 1000
+        nil))
+    (fuzzy-score query (:item/label item))))
+
 (defn picker-matches
-  "The picker's visible items: matching items, best first. The repo picker's
-   items come ranked by frecency, which a query only breaks into tiers of
-   match quality. The bookmark picker also offers to create the typed name,
-   after any matches."
+  "The picker's visible items: matching items, best first, equally good ones
+   in their given order. The repo picker's items come ranked by frecency,
+   which a query only breaks into tiers of match quality. The bookmark picker
+   also offers to create the typed name, after any matches."
   [{:mode/keys [items input purpose]}]
   (let [query (str/trim (ti/value input))
         rank (if (= :repo purpose)
@@ -295,7 +315,7 @@
                (fn [s _] s))
         matched (->> items
                      (keep (fn [item]
-                             (when-let [s (fuzzy-score query (:item/label item))]
+                             (when-let [s (item-score query item)]
                                [(rank s item) item])))
                      (sort-by first)
                      (mapv second))]
