@@ -4,6 +4,7 @@
   (:require
    [charm.components.text-input :as ti]
    [charm.style.core :as style]
+   [charm.style.overlay :as overlay]
    [clojure.string :as str]
    [jjtui.keys :as keys]
    [jjtui.state :as st]))
@@ -115,6 +116,45 @@
               (map #(fg 1 %) (take 10 lines)))))))
 
 ;; ---------------------------------------------------------------------------
+;; Describe popup
+
+(defn- input-window
+  "The text input scrolled so its cursor stays within `width` columns."
+  [input width]
+  (let [{:keys [value pos]} input
+        start (max 0 (- pos (dec width)))]
+    (fit (ti/text-input-view (assoc input :value (subvec value start) :pos (- pos start)))
+         width)))
+
+(defn- describe-popup
+  "Lines of the floating describe box, `width` columns wide."
+  [state width]
+  (let [{:mode/keys [short-id input body]} (:app/mode state)
+        inner (- width 4)
+        rule #(apply str (repeat % "─"))
+        row #(str (dim "│ ") (pad (fit % inner) inner) (dim " │"))
+        title (str " Describe " short-id " ")
+        more (if (str/blank? body) 0 (count (str/split-lines (str/trim body))))]
+    (concat
+     [(str (dim "╭─") (bold title) (dim (str (rule (max 0 (- width 3 (width-of title)))) "╮")))
+      (row (input-window input inner))]
+     (when (pos? more)
+       [(row (dim (str "+ " more " more line" (when (> more 1) "s") ", ctrl+e to edit")))])
+     [(dim (str "╰" (rule (- width 2)) "╯"))])))
+
+(defn- with-popup
+  "Floats the describe box over the body lines."
+  [state body]
+  (let [width (:app/width state)
+        w (max 20 (min 72 (- width 4)))
+        popup (describe-popup state w)
+        ;; Padded so no line is empty: place-overlay drops trailing empty lines
+        base (str/join "\n" (map #(pad % width) body))]
+    (str/split-lines (overlay/place-overlay base (str/join "\n" popup)
+                                            (max 0 (quot (- width w) 2))
+                                            (max 0 (quot (- (count body) (count popup)) 2))))))
+
+;; ---------------------------------------------------------------------------
 ;; Log pane
 
 (def ^:private status-colors
@@ -194,6 +234,7 @@
                 :menu " MENU "
                 :confirm " CONFIRM "
                 :input " INPUT "
+                :describe " DESCRIBE "
                 :help " HELP "
                 " jjtui ")
         badge (paint badge 1 "38;5;15" (str "48;5;" (if (= :pick type) 3 (:badge pal))))
@@ -205,6 +246,7 @@
                     (dim (get keys/pick-help action)))
                (= :picker type) (dim "type to filter · ↑/↓ move · enter select · esc cancel")
                (= :input type) (dim "enter submit · esc cancel")
+               (= :describe type) (dim "enter save · ctrl+e edit in $EDITOR · esc cancel")
                (= :help type) (dim (cond
                                      (ti/focused? (:mode/search mode)) "type to filter · enter done · esc clear"
                                      (seq (ti/value (:mode/search mode))) "/ edit search · j/k scroll · esc clear · q close"
@@ -330,5 +372,6 @@
                      (for [i (range body-h)]
                        (str (pad (get left i "") lw) (dim "│") (get right i ""))))
                    left)))
-        body (take body-h (concat body (repeat "")))]
+        body (take body-h (concat body (repeat "")))
+        body (if (= :describe (get-in state [:app/mode :mode/type])) (with-popup state body) body)]
     (str/join "\n" (concat body panel [(status-line state)]))))

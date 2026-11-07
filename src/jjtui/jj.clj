@@ -31,6 +31,7 @@
 (def Bookmarks [:or [:map [:jj/bookmarks [:vector Bookmark]]] Failure])
 (def CommitIds [:or [:map [:jj/ids [:vector :string]]] Failure])
 (def CommitId [:or [:map [:jj/id :string]] Failure])
+(def Description [:or [:map [:jj/description :string]] Failure])
 
 ;; ---------------------------------------------------------------------------
 ;; Commands
@@ -121,6 +122,14 @@
   (let [res (run dir ["log" "--no-graph" "-r" revset "-T" "commit_id ++ \"\\n\""])]
     (if (ok? res)
       {:jj/ids (vec (remove str/blank? (str/split-lines (:jj/out res))))}
+      (error res))))
+
+(defn description
+  "Full description of `change-id`."
+  [dir change-id]
+  (let [res (run dir ["log" "--no-graph" "-r" change-id "-T" "description"])]
+    (if (ok? res)
+      {:jj/description (:jj/out res)}
       (error res))))
 
 (defn first-parent

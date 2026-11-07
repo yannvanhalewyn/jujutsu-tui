@@ -267,8 +267,8 @@ bb demo-conflict-repo [dir]  # throwaway repo with a conflicted rebase, default 
         <li><b>Inline file lists</b> under each change (status letter M/A/D/R/C + path), via <kbd>tab</kbd> for one change or <kbd>shift+tab</kbd> / <kbd>i</kbd> for all. File rows are selectable.</li>
         <li><b>Split diff pane</b> on the right (log | diff) that follows the cursor, rendered by a configurable preview command.</li>
         <li><b>Status bar</b> — mode, mark count, <code>--ignore-immutable</code> flag, revset, active diff tool, last message.</li>
-        <li><b>Bottom panel</b> for menus, pickers and prompts; <kbd>?</kbd> shows a full help overlay.</li>
-        <li><b>External / interactive commands</b> (diff tools, <code>$EDITOR</code> via <code>jj describe</code>, <code>jj split</code>, <code>jj squash</code> that may open an editor) suspend the TUI, run in the real terminal, then the TUI resumes and refreshes.</li>
+        <li><b>Bottom panel</b> for menus, pickers and prompts; <kbd>?</kbd> shows a full help overlay. <kbd>d</kbd> floats a small describe popup over the log instead.</li>
+        <li><b>External / interactive commands</b> (diff tools, <code>$EDITOR</code> via <code>jj describe --editor</code>, <code>jj split</code>, <code>jj squash</code> that may open an editor) suspend the TUI, run in the real terminal, then the TUI resumes and refreshes.</li>
       </ul>
     </section>
 
@@ -433,7 +433,7 @@ const ROADMAP = [
   { title: 'Branch diff picker', area: 'diff', status: 'done', notes: 'D: fuzzy bookmark picker, $revset = fork_point(trunk() | B)..B.' },
   { title: 'Rebase pick mode', area: 'operations', status: 'done', notes: 'r: enter/o onto, a after, b before, s cycles -r → -s → -b.' },
   { title: 'Squash', area: 'operations', status: 'done', notes: 's into parent or marks into cursor (--from "a | b"); S into a picked target. Background unless descriptions need combining.' },
-  { title: 'Describe via $EDITOR', area: 'operations', status: 'done', notes: 'd runs jj describe, suspending the TUI.' },
+  { title: 'Describe popup', area: 'operations', status: 'done', notes: 'd opens a popup prefilled with the first line (the rest of the description is kept); enter runs jj describe -m, ctrl+e hands the text to jj describe --editor, suspending the TUI.' },
   { title: 'New / N menu', area: 'operations', status: 'done', notes: 'n new (merge with marks); N: a insert after, b insert before, e toggle --no-edit.' },
   { title: 'Abandon with confirm', area: 'operations', status: 'done', notes: 'a: confirm, then jj abandon X…' },
   { title: 'Absorb', area: 'operations', status: 'done', notes: 'A: jj absorb --from X' },
@@ -496,7 +496,7 @@ const KEYMAP = [
     { k: 'esc', d: 'clear marks (when no mode active)' },
   ], note: 'Batch semantics: with marks, `enter` (combined diff), `n` (merge: new change with all marks as parents), `a` (abandon all), `r` (rebase marks), `s` (squash marks into cursor change), `S` (squash marks into picked target), `p`/`P` (push) operate on the marks; otherwise on the cursor change. Marks are cleared after mutating batch ops.' },
   { id: 'ops', title: 'Change operations', sub: 'mnemonic', cols: ['Key', 'Mnemonic', 'jj command'], rows: [
-    { k: 'd', m: 'describe', d: '`jj describe -r X` (opens $EDITOR via jj)' },
+    { k: 'd', m: 'describe', d: 'popup editing the first line of X\'s description (the rest is kept): enter = `jj describe -r X -m …`, ctrl+e = `jj describe -r X --editor -m …` (jj\'s configured editor, e.g. $EDITOR), esc = cancel' },
     { k: 'n', m: 'new', d: '`jj new X` / `jj new M1 M2 …`' },
     { k: 'N', m: 'New…', d: 'menu: a = insert after (`-A`), b = insert before (`-B`), e = toggle `--no-edit`' },
     { k: 'e', m: 'edit', d: '`jj edit X`' },
@@ -1046,7 +1046,9 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
         move(1); break;
       case 'c': S.marks.clear(); msg('marks cleared'); break;
       case 'esc': if (S.marks.size) { S.marks.clear(); msg('marks cleared'); } break;
-      case 'd': run('jj describe -r ' + c.id + ii(), { interactive: true, touched: [S.cur.ci] }); break;
+      case 'd': S.mode = 'input'; S.input = { prompt: 'describe ' + c.id + ': ', value: c.desc,
+        onSubmit: v => run('jj describe -r ' + c.id + ' -m ' + JSON.stringify(v.trim()) + ii(), { touched: [S.cur.ci], after: () => { c.desc = v.trim(); } }),
+        onEditor: v => run('jj describe -r ' + c.id + ' --editor -m ' + JSON.stringify(v.trim()) + ii(), { interactive: true, touched: [S.cur.ci] }) }; break;
       case 'n': { const t = targets(); run('jj new ' + ids(t).join(' '), { after: () => S.marks.clear() }); break; }
       case 'N': openMenu('New…', () => [
         ['a', 'insert after (-A)', () => run('jj new -A ' + ids(targets()).join(' ') + (S.noEdit ? ' --no-edit' : ''), { after: () => S.marks.clear() })],
@@ -1146,6 +1148,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     const p = S.input;
     if (key === 'esc') { closeModal(); msg('cancelled'); return; }
     if (key === 'enter') { const f = p.onSubmit, v = p.value; closeModal(); f(v); return; }
+    if (key === 'ctrl+e' && p.onEditor) { const f = p.onEditor, v = p.value; closeModal(); f(v); return; }
     if (key === 'backspace') { p.value = p.value.slice(0, -1); return; }
     if (raw.length === 1) p.value += raw;
   }

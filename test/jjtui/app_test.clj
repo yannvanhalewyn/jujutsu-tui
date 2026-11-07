@@ -138,6 +138,31 @@
     (is (empty? (second (press s "n"))) "n cancels")
     (is (= ["abandon" "wwww"] (jj-args (second (press s "y")))))))
 
+(deftest describe-popup-test
+  (let [[s fx] (press (loaded) "j" "d")
+        _ (is (= [{:fx/type :description :fx/change-id "bbbb"}] fx))
+        [s] (press s {:type :msg/description-loaded
+                      :msg/change-id "bbbb"
+                      :msg/result {:jj/description "B\n\nWhy B.\n"}})
+        [s] (press s "x")]
+    (is (= :describe (get-in s [:app/mode :mode/type])))
+    (testing "enter replaces the first line, keeping the rest"
+      (let [[s fx] (press s "enter")]
+        (is (nil? (:app/mode s)))
+        (is (= ["describe" "-r" "bbbb" "-m" "Bx\n\nWhy B."] (jj-args fx)))))
+    (testing "ctrl+e hands the edited text to jj's editor"
+      (let [[s fx] (press s (msg/key-press "e" :ctrl true))]
+        (is (= [{:fx/type :quit}] fx))
+        (is (= ["jj" "describe" "-r" "bbbb" "--editor" "-m" "Bx\n\nWhy B."] (get-in s [:app/exec :exec/argv])))))
+    (testing "escape cancels"
+      (let [[s fx] (press s "escape")]
+        (is (nil? (:app/mode s)))
+        (is (empty? fx)))))
+  (testing "a jj failure is shown instead of the popup"
+    (let [[s] (press (loaded) "d" {:type :msg/description-loaded :msg/change-id "wwww" :msg/result {:jj/error "boom"}})]
+      (is (nil? (:app/mode s)))
+      (is (= "boom" (get-in s [:app/message :message/text]))))))
+
 (deftest files-toggle-test
   (testing "shift+tab shows the files of every change"
     (let [[s fx] (press (loaded) (msg/key-press :tab :shift true))]

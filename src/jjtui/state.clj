@@ -84,6 +84,12 @@
             [:mode/title :string]
             [:mode/input TextInput]
             [:mode/bookmark {:optional true} :string]]]
+   [:describe [:map
+               [:mode/type [:= :describe]]
+               [:mode/change-id :string]
+               [:mode/short-id :string]
+               [:mode/input {:doc "First line of the description"} TextInput]
+               [:mode/body {:doc "The rest of the description, kept as is"} :string]]]
    [:no-repo [:map
               [:mode/type [:= :no-repo]]
               [:mode/git-root {:doc "The git repo without jj that jjtui started in"} :string]

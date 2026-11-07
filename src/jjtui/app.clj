@@ -479,7 +479,10 @@
                    (seq (get-in state [:app/repo :repo/marks])) (info "Cleared marks"))
                  []]
 
-    :describe (with-entry state #(run-exec state (ignore-immutable state ["jj" "describe" "-r" (:change/id %)])))
+    :describe (with-entry state
+                (fn [entry]
+                  [(info state "Loading description…")
+                   [{:fx/type :description :fx/change-id (:change/id entry)}]]))
     :new (let [ts (targets state)]
            (if (empty? ts)
              [(error state "No change at cursor") []]
@@ -617,6 +620,36 @@
                 [state []]
                 (run-jj state ["bookmark" "rename" bookmark value]
                         {:label "Renaming bookmark" :success (str "Renamed " bookmark " to " value)})))))
+
+(defn- describe-message
+  "The popup's first line on top of the rest of the original description."
+  [{:mode/keys [input body]}]
+  (str/trim (str (str/trim (ti/value input)) "\n" body)))
+
+(defn- handle-describe-key [state k msg]
+  (let [{:mode/keys [change-id short-id] :as mode} (:app/mode state)
+        closed (assoc state :app/mode nil)]
+    (case k
+      "escape" [closed []]
+      "enter" (run-jj closed (ignore-immutable state ["describe" "-r" change-id "-m" (describe-message mode)])
+                      {:label "Describing" :success (str "Described " short-id)})
+      ;; jj opens its configured editor ($JJ_EDITOR, ui.editor, $VISUAL, $EDITOR) on the popup's text
+      "ctrl+e" (run-exec closed (ignore-immutable state ["jj" "describe" "-r" change-id "--editor" "-m" (describe-message mode)]))
+      (let [[in _] (ti/text-input-update (:mode/input mode) msg)]
+        [(assoc-in state [:app/mode :mode/input] in) []]))))
+
+(defn- description-loaded [state {:msg/keys [change-id result]}]
+  (if-let [err (:jj/error result)]
+    [(error state err) []]
+    (let [[subject body] (str/split (:jj/description result) #"\n" 2)]
+      [(assoc state
+              :app/message nil
+              :app/mode {:mode/type :describe
+                         :mode/change-id change-id
+                         :mode/short-id (or (:change/short-id (entry-by-change state change-id)) change-id)
+                         :mode/input (input subject "")
+                         :mode/body (or body "")})
+       []])))
 
 ;; ---------------------------------------------------------------------------
 ;; Repo chooser
@@ -761,6 +794,7 @@
                  (#{"y" "enter"} k) (confirmed state (:mode/on-yes mode))
                  (#{"n" "escape" "q"} k) [(info (assoc state :app/mode nil) "Cancelled") []]
                  :else [state []])
+      :describe (handle-describe-key state k msg)
       :input (cond
                (= "escape" k) [(assoc state :app/mode nil) []]
                (= "enter" k) (input-submitted state mode)
@@ -852,6 +886,7 @@
           :msg/log-loaded (log-loaded state msg)
           :msg/jj-done (jj-done state msg)
           :msg/bookmarks-loaded (bookmarks-loaded state msg)
+          :msg/description-loaded (description-loaded state msg)
           :msg/repo-opened (repo-opened state msg)
           :msg/diff-resolved (let [result (:msg/result msg)]
                                (if-let [err (:jj/error result)]

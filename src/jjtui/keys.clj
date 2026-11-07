@@ -45,7 +45,7 @@
     [[["m" "space"] :mark/toggle "Toggle mark"]
      [["c" "escape"] :mark/clear "Clear marks"]]]
    ["Changes"
-    [[["d"] :describe "Describe ($EDITOR)"]
+    [[["d"] :describe "Describe (popup, ctrl+e for $EDITOR)"]
      [["n"] :new "New change (merge if marked)"]
      [["N"] :new-menu "New… (after / before)"]
      [["e"] :edit "Edit change"]
