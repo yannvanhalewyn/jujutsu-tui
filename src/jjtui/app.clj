@@ -426,15 +426,16 @@
 
 (defn- toggle-rebase-source
   "Adds the cursor's change to the changes being rebased, or removes it when
-   already there, then steps to the next change like marking does. Every
-   source gets the same -r/-s/-b flag, as with marks."
+   already there, then steps to the next change like marking does. Removing
+   the last one cancels the rebase, as esc does. Every source gets the same
+   -r/-s/-b flag, as with marks."
   [state]
   (if-let [id (:change/id (cursor-entry state))]
     (let [sources (get-in state [:app/mode :mode/sources])]
       (cond
         (not (some #{id} sources))
         [(next-change (assoc-in state [:app/mode :mode/sources] (conj sources id))) []]
-        (= [id] sources) [(error state "Rebase needs at least one change") []]
+        (= [id] sources) [(info (assoc state :app/mode nil) "Cancelled") []]
         :else [(next-change (assoc-in state [:app/mode :mode/sources] (filterv #(not= id %) sources))) []]))
     [(error state "No change at cursor") []]))
 

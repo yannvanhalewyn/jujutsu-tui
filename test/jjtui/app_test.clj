@@ -190,11 +190,10 @@
           (let [[s] (press s "k" "r")]
             (is (= ["wwww"] (get-in s [:app/mode :mode/sources])))
             (is (= "aaaa" (cursor-id s)))))
-        (testing "but never the last one, and then the cursor stays"
+        (testing "removing the last one cancels the rebase, leaving the cursor"
           (let [[s] (press s "k" "r" "g" "r")]
-            (is (= ["wwww"] (get-in s [:app/mode :mode/sources])))
-            (is (= "wwww" (cursor-id s)))
-            (is (= :error (get-in s [:app/message :message/level])))))))
+            (is (nil? (:app/mode s)))
+            (is (= "wwww" (cursor-id s)))))))
     (testing "--ignore-immutable applies when toggled"
       (let [[s] (press (loaded) "!" "r" "G")
             [_ fx] (press s "enter")]

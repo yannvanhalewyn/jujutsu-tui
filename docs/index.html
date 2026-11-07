@@ -521,7 +521,7 @@ const KEYMAP = [
     { k: 'A', m: 'absorb', d: '`jj absorb --from X`' },
     { k: 's', m: 'squash', d: 'no marks: `jj squash -r X` (into parent); marks: `jj squash --from "M1 | M2 …" --into X`. Runs in the background unless two descriptions need combining, then jj opens $EDITOR' },
     { k: 'S', m: 'Squash into…', d: 'pick target, `jj squash --from X|"M1 | M2 …" --into T`' },
-    { k: 'r', m: 'rebase', d: 'pick destination mode, stepping past the cursor\'s change when it is a source: enter/o = onto (`-d`), a = after (`-A`), b = before (`-B`), r = add/remove the change at the cursor as a source and step to the next change (like marks; the last one stays), s = cycle source mode `-r`→`-s`→`-b`, applied to every source' },
+    { k: 'r', m: 'rebase', d: 'pick destination mode, stepping past the cursor\'s change when it is a source: enter/o = onto (`-d`), a = after (`-A`), b = before (`-B`), r = add/remove the change at the cursor as a source and step to the next change (like marks; removing the last one cancels), s = cycle source mode `-r`→`-s`→`-b`, applied to every source' },
     { k: 'X', m: 'split', d: '`jj split -r X` (interactive)' },
     { k: 'M', m: 'Merge tool', d: '`jj resolve -r X [file]` (interactive; on a file row only that file). Errors without suspending when X has no conflicts' },
     { k: 'u / U', m: 'undo / redo', d: '`jj undo` / `jj redo`' },
@@ -1174,7 +1174,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
       if (key === 's') { P.srcMode = { '-r': '-s', '-s': '-b', '-b': '-r' }[P.srcMode]; return; }
       if (key === 'r') {
         if (!P.src.includes(S.cur.ci)) P.src = P.src.concat([S.cur.ci]);
-        else if (P.src.length === 1) { msg('Rebase needs at least one change', 'err'); return; }
+        else if (P.src.length === 1) { closeModal(); msg('cancelled'); return; }
         else P.src = P.src.filter(i => i !== S.cur.ci);
         moveChange(1); return;
       }
