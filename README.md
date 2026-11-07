@@ -101,7 +101,8 @@ change, or for just the file under the cursor when its file list is expanded.
 - `b` / `B` set, rename and delete bookmarks; `p` / `P` push, `f` / `F` fetch and pull.
 - `L` changes the log revset on the fly; `!` toggles `--ignore-immutable`.
 - `u` / `U` undo and redo through the operation log.
-- In a git repo without jj, jjtui offers to run `jj git init --colocate` for you.
+- Outside a jj repo, jjtui offers to set jj up there, or to open one of the jj
+  repos under the current directory or another recently visited one.
 
 <img src="docs/media/switch.gif" alt="Switching between recent repositories and workspaces" width="800">
 

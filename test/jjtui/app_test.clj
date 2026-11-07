@@ -341,11 +341,15 @@
                         {:node/id "cb" :node/parents ["ca"] :node/bookmarks ["feat"]}
                         {:node/id "ca" :node/parents ["cm"] :node/bookmarks ["main"]}])
         s (branch-diff-loaded (loaded) g)
-        bases #(take 4 (map (juxt :item/value :item/detail) (st/picker-matches (:app/mode (first (apply press s %))))))]
-    (testing "the bookmark a change without one stacks on comes right after trunk"
-      (is (= [["trunk()" "default"] ["feat" "parent"] ["main" nil] ["main@origin" nil]] (bases ["enter"]))))
+        labels #(take 3 (map :item/label (st/picker-matches (:app/mode (first (apply press s %))))))
+        revset #(some (fn [arg] (when (str/starts-with? arg "fork_point") arg))
+                      (get-in (first (apply press s %)) [:app/exec :exec/argv]))]
+    (testing "the bookmark a change without one stacks on comes first, tagged by its name, then trunk"
+      (is (= ["feat (parent)  c  d" "trunk()" "main  c  d"] (labels ["enter"]))))
     (testing "so does the parent of a picked bookmark"
-      (is (= [["trunk()" "default"] ["main" "parent"] ["main@origin" nil] ["cw" nil]] (bases ["f" "e" "a" "t" "enter"]))))))
+      (is (= ["main (parent)  c  d" "trunk()" "main@origin  c  d"] (labels ["f" "e" "a" "t" "enter"]))))
+    (testing "enter right away diffs from the fork point with the parent"
+      (is (= "fork_point(feat | cw)..cw" (revset ["enter" "enter"]))))))
 
 (deftest branch-diff-test
   (let [[s] (press (branch-diff-loaded (loaded)) "f" "e" "a" "t" "enter")
@@ -354,7 +358,7 @@
                       (get-in (first (apply press s %)) [:app/exec :exec/argv]))]
     (testing "picking the branch offers its base: trunk, the other bookmarks, then the loaded changes"
       (is (= ["trunk()" "main" "main@origin" "cw" "cb" "ca" "cm"] (values []))))
-    (testing "enter right away diffs from the fork point with trunk"
+    (testing "without a parent, enter right away diffs from the fork point with trunk"
       (is (= "fork_point(trunk() | feat)..feat" (revset ["enter"]))))
     (testing "another bookmark can be the base"
       (is (= "fork_point(main | feat)..feat" (revset ["m" "a" "i" "n" "enter"]))))
@@ -526,7 +530,7 @@
     (testing "i creates a jj repo in the start dir"
       (is (= [{:fx/type :init-repo :fx/dir "/mq" :fx/colocate? false}] (second (press s "i")))))
     (testing "a repo without a hotkey is picked with j + enter"
-      (is (= [{:fx/type :open-repo :fx/dir "/r10"}] (second (apply press s (concat (repeat 10 "j") ["enter"]))))))
+      (is (= [{:fx/type :open-repo :fx/dir "/r8"}] (second (apply press s (concat (repeat 10 "j") ["enter"]))))))
     (testing "without repos to offer, creating one is selected"
       (is (= [{:fx/type :init-repo :fx/dir "/mq" :fx/colocate? false}] (second (press (chooser [] []) "enter")))))))
 

@@ -275,21 +275,27 @@
                     (remove #(= (:item/value cursor) (:item/value %))))
               bms))))
 
+(defn- parent-item
+  "A bookmark `source` stacks on, tagged next to its name so it shows however
+   narrow the picker is."
+  [bms bname]
+  (let [{:bookmark/keys [commit description]}
+        (first (filter #(and (= bname (:bookmark/name %)) (nil? (:bookmark/remote %))) bms))]
+    {:item/label (str/join "  " (remove str/blank? [(str bname " (parent)") commit description]))
+     :item/value bname}))
+
 (defn- base-items
   "What `source` (a bookmark, or the commit id of a change without one) can
-   be diffed against, the default first: trunk, the bookmarks it stacks on,
+   be diffed against, the default first: the bookmarks it stacks on, trunk,
    the other bookmarks, then the loaded changes."
   [state graph source bms]
   (let [parents (when graph
                   (graph/parent-bookmarks graph (if (graph/node graph source)
                                                   source
                                                   (:node/id (graph/bookmark-node graph source)))))
-        parent? (set parents)
-        local (into {} (comp (remove :bookmark/remote) (map (juxt :bookmark/name identity))) bms)]
-    (-> [{:item/label "trunk()" :item/detail "default" :item/value "trunk()"}]
-        (into (map #(assoc (if-let [b (local %)] (bookmark-item b %) {:item/label % :item/value %})
-                           :item/detail "parent"))
-              parents)
+        parent? (set parents)]
+    (-> (mapv #(parent-item bms %) parents)
+        (conj {:item/label "trunk()" :item/value "trunk()"})
         (into (comp (map #(bookmark-item % (:bookmark/ref %)))
                     (remove #(or (= source (:item/value %)) (parent? (:item/value %)))))
               bms)

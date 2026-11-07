@@ -250,9 +250,9 @@ footer { color: var(--muted); font-size: .85rem; padding: 30px 0 0; }
 ln -s $(pwd)/bin/jjtui ~/bin/jjtui</pre></div>
         </div>
         <div>
-          <h3 style="margin-top:0">Run (inside a jj or git repo)</h3>
+          <h3 style="margin-top:0">Run (anywhere, ideally inside a jj repo)</h3>
           <div class="code"><button class="copy" type="button">Copy</button><pre data-sh>jjtui [-r REVSET] [--config PATH]</pre></div>
-          <p class="muted">In a git repo without jj, jjtui opens a chooser: <kbd>i</kbd> runs <code>jj git init --colocate</code> in the git repo's root (not the directory you started in), <kbd>p</kbd> opens the jj repo it sits inside, if any, and <kbd>1</kbd>–<kbd>9</kbd> open recently visited repos.</p>
+          <p class="muted">Outside a jj repo, jjtui opens a chooser. <kbd>i</kbd> sets jj up: in a git repo it runs <code>jj git init --colocate</code> in the git repo's root (not the directory you started in), elsewhere <code>jj git init</code> in the current directory. In a git repo inside a jj repo, <kbd>p</kbd> opens that jj repo. Below come the jj repos under the current directory, visited ones by frecency and then the ones found directly inside it, followed by other recently visited repos; <kbd>1</kbd>–<kbd>9</kbd> open the first nine, <kbd>j</kbd>/<kbd>k</kbd> and <kbd>enter</kbd> any of them.</p>
         </div>
       </div>
       <h3>Develop</h3>
@@ -442,7 +442,7 @@ const ROADMAP = [
   { title: 'Inline file lists', area: 'log', status: 'done', notes: 'tab for the cursor change, shift+tab / i for all; file rows are selectable.' },
   { title: 'Split diff pane', area: 'diff', status: 'done', notes: '| toggles; follows the cursor; J/K scroll, ctrl+f/ctrl+b page, < / > resize (5% steps, 20–80%).' },
   { title: 'External diff tools + picker', area: 'diff', status: 'done', notes: 'enter opens the active tool (file row wins over marks); v picks among :diff-tools; {:cmd … :wait? true} map form; presets for difft, delta, diff-so-fancy, meld, kdiff3, code when on PATH.' },
-  { title: 'Branch diff picker', area: 'diff', status: 'done', notes: 'D: the cursor change first, then the bookmarks; then a base picker (trunk() first, the bookmarks it stacks on, read from an in-memory graph of trunk()..(bookmarks() | cursor), the other bookmarks, then the loaded changes, grepped like /); $revset = fork_point(base | B)..B.' },
+  { title: 'Branch diff picker', area: 'diff', status: 'done', notes: 'D: the cursor change first, then the bookmarks; then a base picker (the bookmarks it stacks on, tagged "(parent)" and the default, read from an in-memory graph of trunk()..(bookmarks() | cursor); then trunk(), the other bookmarks, then the loaded changes, grepped like /); $revset = fork_point(base | B)..B.' },
   { title: 'Rebase pick mode', area: 'operations', status: 'done', notes: 'r: enter/o onto, a after, b before, r adds/removes the change at the cursor, s cycles -r → -s → -b (applied to every source).' },
   { title: 'Squash', area: 'operations', status: 'done', notes: 's into parent or marks into cursor (--from "a | b"); S into a picked target. Background unless descriptions need combining.' },
   { title: 'Describe popup', area: 'operations', status: 'done', notes: 'd opens a popup prefilled with the first line (the rest of the description is kept); enter runs jj describe -m, ctrl+e hands the text to jj describe --editor, suspending the TUI.' },
@@ -504,7 +504,7 @@ const KEYMAP = [
   ]},
   { id: 'diff', title: 'Diff', rows: [
     { k: 'enter', d: 'open external diff: cursor change, or combined marked changes; on a file row only that file (even with marks)' },
-    { k: 'D', d: 'Diff a branch: pick the cursor change (listed first, even without a bookmark) or a bookmark, then its base (enter keeps `trunk()`; next come the bookmarks it stacks on, then the others; type to filter, changes by change id, commit id or description, like `/`). Diffs `fork_point(base | B)` → `B` (whole branch, like a PR)' },
+    { k: 'D', d: 'Diff a branch: pick the cursor change (listed first, even without a bookmark) or a bookmark, then its base (enter takes the bookmark it stacks on, tagged `(parent)`, else `trunk()`; then come `trunk()` and the other bookmarks; type to filter, changes by change id, commit id or description, like `/`). Diffs `fork_point(base | B)` → `B` (whole branch, like a PR)' },
     { k: 'v', d: 'pick the active external diff tool (from config)' },
   ]},
   { id: 'marks', title: 'Marks', sub: 'selection for batch operations', rows: [
@@ -614,8 +614,8 @@ const MODULES = [
   ['jjtui.jj', 'Runs jj (process wrappers); command construction lives in jjtui.app and jjtui.log.'],
   ['jjtui.log', 'Builds the `jj log` template and parses its output into display rows; jj still draws the graph.'],
   ['jjtui.config', 'Defaults, config file loading (EDN, `#env`), command templating.'],
-  ['jjtui.repo', 'Finds where to start (the jj workspace, or a git repo without jj), opens repos and sets jj up with `jj git init --colocate` in the git root.'],
-  ['jjtui.history', 'Records visited repos and ranks them by frecency for the chooser\'s recent list and the w picker.'],
+  ['jjtui.repo', 'Finds where to start (the jj workspace, or the chooser outside one), lists the jj repos inside a dir, opens repos and sets jj up with `jj git init`.'],
+  ['jjtui.history', 'Records visited repos and ranks them by frecency for the chooser and the w picker; the chooser lists the ones under the start dir first.'],
   ['jjtui.keys', 'Key names and the normal-mode keymap, which is also the source of the help screen.'],
   ['jjtui.state', 'Read-only queries on the app state, shared by jjtui.app and jjtui.view.'],
   ['jjtui.view', 'Renders the state to a string with charm styles; layout helpers are shared with jjtui.app so scrolling and drawing agree.'],
@@ -1092,8 +1092,8 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
         };
         openPicker('Diff a branch', sources, src => {
           const parents = parentBookmarks(src.ci);
-          const bases = [{ label: 'trunk()', ci: trunk, base: 'trunk()' }]
-            .concat(parents.map(b => ({ label: b + '  (parent)', ci: CH.findIndex(x => x.bm.includes(b)), base: b })))
+          const bases = parents.map(b => ({ label: b + ' (parent)', ci: CH.findIndex(x => x.bm.includes(b)), base: b }))
+            .concat([{ label: 'trunk()', ci: trunk, base: 'trunk()' }])
             .concat(bookmarks().filter(b => b.name !== src.rev && !parents.includes(b.name)).map(b => ({ label: b.name, ci: b.ci, base: b.name })))
             .concat(CH.map((c, ci) => ({ label: changeLabel(c), ci, base: c.sha, change: true })));
           const name = src.rev === CH[src.ci].sha ? CH[src.ci].id : src.rev;
