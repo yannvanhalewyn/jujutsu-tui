@@ -83,7 +83,7 @@
   {"n" :search/next "N" :search/prev "escape" :search/clear})
 
 (def pick-help
-  {:rebase "enter/o onto · a after · b before · s source mode · esc cancel"
+  {:rebase "enter/o onto · a after · b before · r add/remove source · s source mode · esc cancel"
    :squash-into "enter squash into · esc cancel"})
 
 (defn display-key [k]

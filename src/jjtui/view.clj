@@ -359,7 +359,7 @@
                            ["search" "type to jump, ↑/↓ next/prev match, enter keep, esc back"]
                            ["search active" "n/N next/prev match, / edit query, esc clear"]
                            ["pick" "j/k move, enter select, esc cancel"]
-                           ["rebase pick" "a after, b before, s source mode"]
+                           ["rebase pick" "a after, b before, r add/remove change, s source mode"]
                            ["picker" "type to filter, ↑/↓, enter, esc"]
                            ["menu" "press the option key, esc cancel"]]]])
         match? (fn [title [ks desc]]

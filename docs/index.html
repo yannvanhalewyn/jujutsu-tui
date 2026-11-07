@@ -443,7 +443,7 @@ const ROADMAP = [
   { title: 'Split diff pane', area: 'diff', status: 'done', notes: '| toggles; follows the cursor; J/K scroll, ctrl+f/ctrl+b page, < / > resize (5% steps, 20–80%).' },
   { title: 'External diff tools + picker', area: 'diff', status: 'done', notes: 'enter opens the active tool (file row wins over marks); v picks among :diff-tools; {:cmd … :wait? true} map form; presets for difft, delta, diff-so-fancy, meld, kdiff3, code when on PATH.' },
   { title: 'Branch diff picker', area: 'diff', status: 'done', notes: 'D: fuzzy bookmark picker, $revset = fork_point(trunk() | B)..B.' },
-  { title: 'Rebase pick mode', area: 'operations', status: 'done', notes: 'r: enter/o onto, a after, b before, s cycles -r → -s → -b.' },
+  { title: 'Rebase pick mode', area: 'operations', status: 'done', notes: 'r: enter/o onto, a after, b before, r adds/removes the change at the cursor, s cycles -r → -s → -b (applied to every source).' },
   { title: 'Squash', area: 'operations', status: 'done', notes: 's into parent or marks into cursor (--from "a | b"); S into a picked target. Background unless descriptions need combining.' },
   { title: 'Describe popup', area: 'operations', status: 'done', notes: 'd opens a popup prefilled with the first line (the rest of the description is kept); enter runs jj describe -m, ctrl+e hands the text to jj describe --editor, suspending the TUI.' },
   { title: 'New / N menu', area: 'operations', status: 'done', notes: 'n new (merge with marks); N: a insert after, b insert before, e toggle --no-edit.' },
@@ -521,7 +521,7 @@ const KEYMAP = [
     { k: 'A', m: 'absorb', d: '`jj absorb --from X`' },
     { k: 's', m: 'squash', d: 'no marks: `jj squash -r X` (into parent); marks: `jj squash --from "M1 | M2 …" --into X`. Runs in the background unless two descriptions need combining, then jj opens $EDITOR' },
     { k: 'S', m: 'Squash into…', d: 'pick target, `jj squash --from X|"M1 | M2 …" --into T`' },
-    { k: 'r', m: 'rebase', d: 'pick destination mode: enter/o = onto (`-d`), a = after (`-A`), b = before (`-B`), s = cycle source mode `-r`→`-s`→`-b`' },
+    { k: 'r', m: 'rebase', d: 'pick destination mode: enter/o = onto (`-d`), a = after (`-A`), b = before (`-B`), r = add/remove the change at the cursor as a source and step to the next change (like marks; the last one stays), s = cycle source mode `-r`→`-s`→`-b`, applied to every source' },
     { k: 'X', m: 'split', d: '`jj split -r X` (interactive)' },
     { k: 'M', m: 'Merge tool', d: '`jj resolve -r X [file]` (interactive; on a file row only that file). Errors without suspending when X has no conflicts' },
     { k: 'u / U', m: 'undo / redo', d: '`jj undo` / `jj redo`' },
@@ -1162,6 +1162,12 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     if (P.kind === 'rebase') {
       const flag = { enter: '-d', o: '-d', a: '-A', b: '-B' }[key];
       if (key === 's') { P.srcMode = { '-r': '-s', '-s': '-b', '-b': '-r' }[P.srcMode]; return; }
+      if (key === 'r') {
+        if (!P.src.includes(S.cur.ci)) P.src = P.src.concat([S.cur.ci]);
+        else if (P.src.length === 1) { msg('Rebase needs at least one change', 'err'); return; }
+        else P.src = P.src.filter(i => i !== S.cur.ci);
+        moveChange(1); return;
+      }
       if (!flag) return;
       if (P.src.includes(S.cur.ci)) { msg("Can't rebase a change onto itself", 'err'); return; }
       closeModal();
@@ -1343,7 +1349,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
       h = P.kind === 'rebase'
         ? span('c-org c-b', 'rebase ' + P.srcMode + ' ' + esc(src)) + ' → pick destination  ' +
           span('c-blub', 'enter/o') + ' onto · ' + span('c-blub', 'a') + ' after · ' + span('c-blub', 'b') + ' before · ' +
-          span('c-blub', 's') + ' source mode (' + P.srcMode + ') · ' + span('c-blub', 'esc') + ' cancel'
+          span('c-blub', 'r') + ' add/remove source · ' + span('c-blub', 's') + ' source mode (' + P.srcMode + ') · ' + span('c-blub', 'esc') + ' cancel'
         : span('c-org c-b', 'squash ' + esc(src)) + ' → pick target  ' + span('c-blub', 'enter') + ' squash into · ' + span('c-blub', 'esc') + ' cancel';
     } else if (S.mode === 'picker') {
       const p = S.picker, m = pickerMatches();

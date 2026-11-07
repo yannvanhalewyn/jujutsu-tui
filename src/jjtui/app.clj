@@ -398,6 +398,28 @@
                                           (into [dest-flag (:change/id target)])))
               {:label "Rebasing" :clear-marks? true}))))
 
+(defn- next-change
+  "Moves the cursor to the next change, skipping its files. Stays put on the last."
+  [state]
+  (if-let [next-node (first (filter #(= :node (:row/kind (get (rows state) %)))
+                                    (range (inc (or (cursor-index state) 0)) (count (rows state)))))]
+    (set-cursor-index state next-node)
+    state))
+
+(defn- toggle-rebase-source
+  "Adds the cursor's change to the changes being rebased, or removes it when
+   already there, then steps to the next change like marking does. Every
+   source gets the same -r/-s/-b flag, as with marks."
+  [state]
+  (if-let [id (:change/id (cursor-entry state))]
+    (let [sources (get-in state [:app/mode :mode/sources])]
+      (cond
+        (not (some #{id} sources))
+        [(next-change (assoc-in state [:app/mode :mode/sources] (conj sources id))) []]
+        (= [id] sources) [(error state "Rebase needs at least one change") []]
+        :else [(next-change (assoc-in state [:app/mode :mode/sources] (filterv #(not= id %) sources))) []]))
+    [(error state "No change at cursor") []]))
+
 (defn- finish-pick [state dest-flag]
   (let [{:mode/keys [action sources]} (:app/mode state)
         target (cursor-entry state)]
@@ -516,15 +538,8 @@
      []]
 
     :mark/toggle
-    (if-let [entry (cursor-entry state)]
-      (let [id (:change/id entry)
-            state (update-in state [:app/repo :repo/marks] #(if (contains? % id) (disj % id) (conj % id)))]
-        ;; Step to the next change, skipping its files
-        [(if-let [next-node (first (filter #(= :node (:row/kind (get (rows state) %)))
-                                           (range (inc (or (cursor-index state) 0)) (count (rows state)))))]
-           (set-cursor-index state next-node)
-           state)
-         []])
+    (if-let [id (:change/id (cursor-entry state))]
+      [(next-change (update-in state [:app/repo :repo/marks] #(if (contains? % id) (disj % id) (conj % id)))) []]
       [state []])
     :mark/clear [(cond-> (assoc-in state [:app/repo :repo/marks] #{})
                    (seq (get-in state [:app/repo :repo/marks])) (info "Cleared marks"))
@@ -804,6 +819,7 @@
       (and rebase? (= "b" k)) (finish-pick state "-B")
       (and rebase? (= "s" k))
       [(update-in state [:app/mode :mode/source-flag] {"-r" "-s" "-s" "-b" "-b" "-r"}) []]
+      (and rebase? (= "r" k)) (toggle-rebase-source state)
       search-step (perform state search-step)
       (contains? nav-actions action) (perform state action)
       :else [state []])))

@@ -169,6 +169,23 @@
       (let [[s fx] (press s "enter")]
         (is (empty? fx))
         (is (= :error (get-in s [:app/message :message/level])))))
+    (testing "r adds the cursor's change to the sources and steps past its files to the next change"
+      (let [[s] (press s "j" "r")
+            cursor-id #(:change/id (st/cursor-entry %))]
+        (is (= ["wwww" "bbbb"] (get-in s [:app/mode :mode/sources])))
+        (is (= "aaaa" (cursor-id s)))
+        (testing "the source flag applies to each"
+          (let [[_ fx] (press s "s" "s" "G" "enter")]
+            (is (= ["rebase" "-b" "wwww" "-b" "bbbb" "-d" "mmmm"] (jj-args fx)))))
+        (testing "r on a source removes it, and steps on too"
+          (let [[s] (press s "k" "r")]
+            (is (= ["wwww"] (get-in s [:app/mode :mode/sources])))
+            (is (= "aaaa" (cursor-id s)))))
+        (testing "but never the last one, and then the cursor stays"
+          (let [[s] (press s "k" "r" "g" "r")]
+            (is (= ["wwww"] (get-in s [:app/mode :mode/sources])))
+            (is (= "wwww" (cursor-id s)))
+            (is (= :error (get-in s [:app/message :message/level])))))))
     (testing "--ignore-immutable applies when toggled"
       (let [[s] (press (loaded) "!" "r" "G")
             [_ fx] (press s "enter")]
