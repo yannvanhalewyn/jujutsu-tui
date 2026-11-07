@@ -23,6 +23,7 @@
      [["ctrl+d"] :cursor/half-down "Half page down"]
      [["ctrl+u"] :cursor/half-up "Half page up"]
      [["@"] :cursor/working-copy "Jump to working copy"]
+     [["/"] :search "Search change ids, commit ids, descriptions"]
      [["R" "ctrl+r"] :refresh "Refresh"]
      [["?"] :help "Help"]
      [["q"] :quit "Quit"]]]

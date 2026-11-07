@@ -149,7 +149,7 @@ select.sel { padding: 5px 10px; border: 1px solid var(--border); border-radius: 
 .term .status > span { padding: 0 8px; }
 .term .status .mode { background: #875fd7; color: #fff; font-weight: bold; }
 .term .status .mode.pick { background: #d7875f; }
-.term .status .mode.picker, .term .status .mode.input { background: #5f87d7; }
+.term .status .mode.picker, .term .status .mode.input, .term .status .mode.search { background: #5f87d7; }
 .term .status .mode.menu, .term .status .mode.confirm { background: #d75f87; }
 .term .status .mode.help { background: #5faf5f; }
 .term .status .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; }
@@ -448,6 +448,7 @@ const ROADMAP = [
   { title: 'Resolve conflicts', area: 'operations', status: 'done', notes: 'M: jj resolve -r X in the merge tool (only the file on a file row); refuses changes without conflicts.' },
   { title: 'shift+tab toggles all files', area: 'log', status: 'done', notes: 'shift+tab is the primary key; i stays as an alias.' },
   { title: 'jj integration test suite (bb test)', area: 'testing', status: 'done', notes: 'jj_test runs against real jj repos, next to the app, log and config tests.' },
+  { title: 'Search the log', area: 'log', status: 'done', notes: '/ jumps as you type to changes whose change id or commit id starts with the query, or whose description (any line) contains it, ignoring case; ↑/↓ cycle matches, enter keeps, esc goes back.' },
 
   { title: 'Op log view', area: 'history', status: 'planned', notes: 'Browse jj op log; undo the selected operation.' },
   { title: 'Conflict navigation', area: 'operations', status: 'planned', notes: 'Jump between conflicted changes/files.' },
@@ -472,6 +473,7 @@ const KEYMAP = [
     { k: 'g / G', d: 'first / last change' },
     { k: 'ctrl+d / ctrl+u', d: 'half page down / up' },
     { k: '@', d: 'jump to working copy' },
+    { k: '/', d: 'search the log: change id / commit id prefix, or text in any description line (case-insensitive)' },
     { k: 'q', d: 'quit' },
     { k: '?', d: 'help' },
     { k: 'R / ctrl+r', d: 'refresh' },
@@ -527,6 +529,10 @@ const KEYMAP = [
     { k: 'esc / q', m: 'Menu', d: 'cancel' },
     { k: 'y / enter', m: 'Confirm', d: 'yes' },
     { k: 'n / esc', m: 'Confirm', d: 'no' },
+    { k: 'type', m: 'Search', d: 'jump to the first match from where the search started (wraps)' },
+    { k: '↑ / ↓ or ctrl+p / ctrl+n', m: 'Search', d: 'previous / next match (wraps)' },
+    { k: 'enter', m: 'Search', d: 'keep the cursor on the match' },
+    { k: 'esc', m: 'Search', d: 'back to where the search started' },
     { k: '/', m: 'Help', d: 'search bindings (type to filter, enter keeps the filter)' },
     { k: 'esc', m: 'Help', d: 'clear the search, then close' },
   ]},
@@ -1003,7 +1009,17 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     return res;
   }
   function openMenu(title, opts) { S.mode = 'menu'; S.menu = { title, opts }; }
-  function closeModal() { S.mode = 'normal'; S.pick = S.picker = S.menu = S.confirm = S.input = null; }
+  function closeModal() { S.mode = 'normal'; S.pick = S.picker = S.menu = S.confirm = S.input = S.search = null; }
+  const searchMatches = q => {
+    q = q.trim().toLowerCase();
+    return q ? CH.map((c, i) => (c.id.startsWith(q) || c.sha.startsWith(q) || c.desc.toLowerCase().includes(q)) ? i : -1).filter(i => i >= 0) : [];
+  };
+  // The match after change `from` going `d` (1 / -1), wrapping; `from` itself counts when `here`.
+  function nextMatch(m, from, d, here) {
+    const c = d > 0 ? m : m.slice().reverse();
+    const after = i => d > 0 ? (here ? i >= from : i > from) : (here ? i <= from : i < from);
+    return c.find(after) ?? c[0];
+  }
 
   /* ---- key handling ---- */
   function normal(key) {
@@ -1016,6 +1032,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
       case 'ctrl+d': move(PAGE); break;
       case 'ctrl+u': move(-PAGE); break;
       case '@': S.cur = { ci: CH.findIndex(x => x.wc), fi: -1 }; break;
+      case '/': S.mode = 'search'; S.search = { query: '', origin: Object.assign({}, S.cur) }; break;
       case 'q': msg('q quits jjtui (disabled in this demo)'); break;
       case '?': S.help = { query: '', typing: false }; break;
       case 'R': case 'ctrl+r': msg('refreshed'); break;
@@ -1152,6 +1169,18 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     if (key === 'backspace') { p.value = p.value.slice(0, -1); return; }
     if (raw.length === 1) p.value += raw;
   }
+  function searchKey(key, raw) {
+    const s = S.search, m = searchMatches(s.query);
+    if (key === 'esc') { S.cur = s.origin; closeModal(); return; }
+    if (key === 'enter') { closeModal(); if (s.query.trim() && !m.length) msg('No change matches "' + s.query.trim() + '"', 'err'); return; }
+    const d = ['↓', 'ctrl+n', 'ctrl+j'].includes(key) ? 1 : ['↑', 'ctrl+p', 'ctrl+k'].includes(key) ? -1 : 0;
+    if (d) { const i = nextMatch(m, S.cur.ci, d, false); if (i != null) S.cur = { ci: i, fi: -1 }; return; }
+    if (key === 'backspace') s.query = s.query.slice(0, -1);
+    else if (raw.length === 1) s.query += raw;
+    else return;
+    const i = nextMatch(searchMatches(s.query), s.origin.ci, 1, true);
+    S.cur = i == null ? s.origin : { ci: i, fi: -1 };
+  }
 
   function keyName(e) {
     const map = { ArrowDown: '↓', ArrowUp: '↑', Enter: 'enter', Escape: 'esc', Tab: 'tab', Backspace: 'backspace', ' ': 'space' };
@@ -1191,6 +1220,7 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
     else if (S.mode === 'menu') menuKey(key);
     else if (S.mode === 'confirm') confirmKey(key);
     else if (S.mode === 'input') inputKey(key, raw);
+    else if (S.mode === 'search') searchKey(key, raw);
     render();
   });
   $('#tHint').addEventListener('mousedown', e => { e.preventDefault(); term.focus(); });
@@ -1280,6 +1310,10 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
       h = span('c-red c-b', esc(S.confirm.text)) + '  ' + span('c-blub', 'y/enter') + ' yes  ' + span('c-blub', 'n/esc') + ' no';
     } else if (S.mode === 'input') {
       h = span('c-org', esc(S.input.prompt)) + esc(S.input.value) + span('c-wht', '▏');
+    } else if (S.mode === 'search') {
+      const q = S.search.query, m = searchMatches(q), n = m.indexOf(S.cur.ci) + 1;
+      h = span('c-org', '/') + esc(q) + span('c-wht', '▏') + '  ' +
+        span('c-dim', !q.trim() ? '' : m.length ? (n || '-') + '/' + m.length : 'no matches');
     }
     panelEl.innerHTML = h;
   }
@@ -1296,6 +1330,8 @@ $('#mods').innerHTML = MODULES.map(([n, d]) => '<div class="mod"><h4>' + esc(n) 
             : S.help.query ? '/ edit search · j/k scroll · esc clear · q close' : '/ search · j/k scroll · esc/q/? close') + '</span>'
         : S.mode === 'picker'
         ? '<span class="msg">type to filter · ↑/↓ move · enter select · esc cancel</span>'
+        : S.mode === 'search'
+        ? '<span class="msg">type to search · ↑/↓ next/prev match · enter keep · esc back</span>'
         : '<span class="msg ' + S.msg.kind + '">' + esc(S.msg.text) + '</span>') +
       (S.help ? '' : '<span class="c-dim">? help</span>');
   }

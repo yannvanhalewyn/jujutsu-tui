@@ -11,7 +11,7 @@
    [jjtui.keys :as keys]
    [jjtui.log :as log]
    [jjtui.state :refer [cursor-entry cursor-index cursor-row entries picker-matches
-                        row-cursor rows selectable-indices]]
+                        row-cursor rows search-matches selectable-indices]]
    [jjtui.view :as view]))
 
 ;; ---------------------------------------------------------------------------
@@ -434,6 +434,10 @@
       [(assoc-in state [:app/repo :repo/cursor] (change-cursor wc)) []]
       [(error state "The working copy is not in this revset") []])
     :refresh (reload state)
+    :search [(assoc state :app/mode {:mode/type :search
+                                     :mode/input (input "" "/")
+                                     :mode/origin (get-in state [:app/repo :repo/cursor])})
+             []]
     :help [(assoc state :app/mode {:mode/type :help :mode/offset 0
                                    :mode/search (ti/text-input :prompt "/" :focused false)})
            []]
@@ -760,6 +764,42 @@
       flag [(update-in state [:app/mode :mode/flags] #(if (contains? % flag) (disj % flag) (conj % flag))) []]
       :else (menu-choice state mode option))))
 
+(defn- next-match
+  "The match after entry index `from` going `dir` (1 or -1), wrapping around;
+   `from` itself counts when `here?`."
+  [matches from dir here?]
+  (let [after? (if (pos? dir) (if here? >= >) (if here? <= <))
+        candidates (if (pos? dir) matches (rseq matches))]
+    (or (first (filter #(after? % from) candidates)) (first candidates))))
+
+(defn- goto-entry [state i]
+  (if-let [entry (get (entries state) i)]
+    (assoc-in state [:app/repo :repo/cursor] (change-cursor entry))
+    state))
+
+(defn- handle-search-key
+  "Typing jumps to the first match from where the search started, ↑/↓ step
+   through the matches, enter keeps the cursor there and escape goes back."
+  [state k msg]
+  (let [{:mode/keys [input origin]} (:app/mode state)
+        query (ti/value input)
+        restore #(assoc-in % [:app/repo :repo/cursor] origin)
+        step #(goto-entry state (next-match (search-matches state query)
+                                            (or (:change/index (cursor-entry state)) 0) % false))]
+    (cond
+      (= "escape" k) [(restore (assoc state :app/mode nil)) []]
+      (= "enter" k) [(cond-> (assoc state :app/mode nil)
+                       (and (not (str/blank? query)) (empty? (search-matches state query)))
+                       (error (str "No change matches " (pr-str (str/trim query)))))
+                     []]
+      (#{"down" "ctrl+n" "ctrl+j"} k) [(step 1) []]
+      (#{"up" "ctrl+p" "ctrl+k"} k) [(step -1) []]
+      :else
+      (let [[in _] (ti/text-input-update input msg)
+            state (restore (assoc-in state [:app/mode :mode/input] in))
+            from (or (:change/index (some->> origin :change/id (entry-by-change state))) 0)]
+        [(goto-entry state (next-match (search-matches state (ti/value in)) from 1 true)) []]))))
+
 (defn- handle-help-key [state k msg]
   (let [search (get-in state [:app/mode :mode/search])
         set-search #(update state :app/mode assoc :mode/search % :mode/offset 0)
@@ -795,6 +835,7 @@
                  (#{"n" "escape" "q"} k) [(info (assoc state :app/mode nil) "Cancelled") []]
                  :else [state []])
       :describe (handle-describe-key state k msg)
+      :search (handle-search-key state k msg)
       :input (cond
                (= "escape" k) [(assoc state :app/mode nil) []]
                (= "enter" k) (input-submitted state mode)

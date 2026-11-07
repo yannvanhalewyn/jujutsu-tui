@@ -90,6 +90,10 @@
                [:mode/short-id :string]
                [:mode/input {:doc "First line of the description"} TextInput]
                [:mode/body {:doc "The rest of the description, kept as is"} :string]]]
+   [:search [:map
+             [:mode/type [:= :search]]
+             [:mode/input TextInput]
+             [:mode/origin {:doc "Cursor to return to on escape"} [:maybe Cursor]]]]
    [:no-repo [:map
               [:mode/type [:= :no-repo]]
               [:mode/git-root {:doc "The git repo without jj that jjtui started in"} :string]
@@ -218,6 +222,25 @@
 (defn cursor-entry [state]
   (when-let [row (cursor-row state)]
     (row-entry state row)))
+
+;; ---------------------------------------------------------------------------
+;; Search
+
+(defn search-matches
+  "Indices into :log/entries of the changes matching `query`, in log order: a
+   change or commit id starting with it, or a description containing it,
+   ignoring case."
+  [state query]
+  (let [q (str/lower-case (str/trim query))]
+    (if (str/blank? q)
+      []
+      (into []
+            (keep (fn [{:change/keys [index id commit-id full-description]}]
+                    (when (or (str/starts-with? id q)
+                              (str/starts-with? commit-id q)
+                              (str/includes? (str/lower-case full-description) q))
+                      index)))
+            (entries state)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Pickers

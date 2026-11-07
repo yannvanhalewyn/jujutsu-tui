@@ -20,7 +20,7 @@
              (str "○  " (marker {:id "bbbb" :commit "cb" :parents ["ca"] :description "B" :bookmarks ["feat"] :conflict? true}) "bbbb")
              "│  B"
              (file-line "│  " "modified" "b.clj")
-             (str "○  " (marker {:id "aaaa" :commit "ca" :parents ["cm"] :description "A"}) "aaaa")
+             (str "○  " (marker {:id "aaaa" :commit "ca" :parents ["cm"] :description "A" :full-description "A  Fixes the Login bug"}) "aaaa")
              "│  A"
              (str "◆  " (marker {:id "mmmm" :commit "cm" :parents [] :immutable? true :description "M"}) "mmmm")
              "│  M"]))
@@ -77,6 +77,31 @@
     (testing "G and g jump to the ends"
       (is (= "mmmm" (cursor-id (first (press s "G")))))
       (is (= "wwww" (cursor-id (first (press s "G" "g"))))))))
+
+(deftest search-test
+  (let [s (loaded)]
+    (testing "matches change id and commit id prefixes, and any description line ignoring case"
+      (is (= "aaaa" (cursor-id (first (press s "/" "a" "a")))))
+      (is (= "mmmm" (cursor-id (first (press s "/" "c" "m")))))
+      (is (= "aaaa" (cursor-id (first (press s "/" "L" "O" "G" "I" "N"))))))
+    (testing "typing jumps to the first match from where the search started, wrapping"
+      (is (= "bbbb" (cursor-id (first (press s "/" "b")))))
+      (is (= "aaaa" (cursor-id (first (press s "j" "j" "j" "/" "b")))) "the cursor's own change counts")
+      (is (= "bbbb" (cursor-id (first (press s "G" "/" "b"))))))
+    (testing "down and up step through the matches, wrapping"
+      (is (= ["aaaa" "bbbb" "aaaa"]
+             (map #(cursor-id (first (apply press s "/" "b" %))) [["down"] ["down" "down"] ["up"]]))))
+    (testing "a query matching nothing goes back to where the search started"
+      (is (= "wwww" (cursor-id (first (press s "/" "a" "z"))))))
+    (testing "enter keeps the cursor on the match, escape goes back"
+      (let [[s'] (press s "/" "b" "down" "enter")]
+        (is (nil? (:app/mode s')))
+        (is (= "aaaa" (cursor-id s'))))
+      (let [[s'] (press s "/" "b" "escape")]
+        (is (nil? (:app/mode s')))
+        (is (= "wwww" (cursor-id s')))))
+    (testing "enter without a match says so"
+      (is (= :error (get-in (first (press s "/" "z" "enter")) [:app/message :message/level]))))))
 
 (deftest cursor-survives-reload-test
   (let [[s] (press (loaded) "j")

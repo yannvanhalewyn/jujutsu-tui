@@ -111,6 +111,18 @@
       [(separator state title)
        (str "  " (ti/text-input-view input))]
 
+      :search
+      (let [query (ti/value input)
+            matches (st/search-matches state query)
+            current (:change/index (st/cursor-entry state))
+            nth-match (first (keep-indexed (fn [i m] (when (= m current) (inc i))) matches))]
+        [(separator state "Search changes")
+         (str "  " (ti/text-input-view input) "  "
+              (dim (cond
+                     (str/blank? query) ""
+                     (empty? matches) "no matches"
+                     :else (str (or nth-match "-") "/" (count matches)))))])
+
       (when-let [lines (message-lines state)]
         (cons (separator state "Message")
               (map #(fg 1 %) (take 10 lines)))))))
@@ -134,12 +146,17 @@
         rule #(apply str (repeat % "─"))
         row #(str (dim "│ ") (pad (fit % inner) inner) (dim " │"))
         title (str " Describe " short-id " ")
+        hint (str " " (bold (fg 3 "ctrl+e")) " open in editor ")
+        ;; ╭─ title ─…─ hint ─╮, dropping the hint when the box is too narrow
+        fill (- width 4 (width-of title) (width-of hint))
+        top (if (pos? fill)
+              (str (dim "╭─") (bold title) (dim (rule fill)) hint (dim "─╮"))
+              (str (dim "╭─") (bold title) (dim (str (rule (max 0 (- width 3 (width-of title)))) "╮"))))
         more (if (str/blank? body) 0 (count (str/split-lines (str/trim body))))]
     (concat
-     [(str (dim "╭─") (bold title) (dim (str (rule (max 0 (- width 3 (width-of title)))) "╮")))
-      (row (input-window input inner))]
+     [top (row (input-window input inner))]
      (when (pos? more)
-       [(row (dim (str "+ " more " more line" (when (> more 1) "s") ", ctrl+e to edit")))])
+       [(row (dim (str "+ " more " more line" (when (> more 1) "s"))))])
      [(dim (str "╰" (rule (- width 2)) "╯"))])))
 
 (defn- with-popup
@@ -235,6 +252,7 @@
                 :confirm " CONFIRM "
                 :input " INPUT "
                 :describe " DESCRIBE "
+                :search " SEARCH "
                 :help " HELP "
                 " jjtui ")
         badge (paint badge 1 "38;5;15" (str "48;5;" (if (= :pick type) 3 (:badge pal))))
@@ -247,6 +265,7 @@
                (= :picker type) (dim "type to filter · ↑/↓ move · enter select · esc cancel")
                (= :input type) (dim "enter submit · esc cancel")
                (= :describe type) (dim "enter save · ctrl+e edit in $EDITOR · esc cancel")
+               (= :search type) (dim "type to search · ↑/↓ next/prev match · enter keep · esc back")
                (= :help type) (dim (cond
                                      (ti/focused? (:mode/search mode)) "type to filter · enter done · esc clear"
                                      (seq (ti/value (:mode/search mode))) "/ edit search · j/k scroll · esc clear · q close"
@@ -282,6 +301,7 @@
                   [title (for [[ks _ desc] bindings]
                            [(str/join " " (map keys/display-key ks)) desc])])
                 [["Modes" [["help" "/ search, enter done, esc clear"]
+                           ["search" "type to jump, ↑/↓ next/prev match, enter keep, esc back"]
                            ["pick" "j/k move, enter select, esc cancel"]
                            ["rebase pick" "a after, b before, s source mode"]
                            ["picker" "type to filter, ↑/↓, enter, esc"]

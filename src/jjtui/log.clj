@@ -26,7 +26,8 @@
    [:change/divergent? "divergent"]
    [:change/working-copy? "current_working_copy"]
    [:change/bookmarks "local_bookmarks.map(|b| b.name()).join(\" \")"]
-   [:change/description "description.first_line()"]])
+   [:change/description "description.first_line()"]
+   [:change/full-description "description.lines().join(\" \")"]])
 
 ;; ---------------------------------------------------------------------------
 ;; Schemas (malli, plain data: validated in the tests, not at runtime)
@@ -45,7 +46,8 @@
    [:change/divergent? :boolean]
    [:change/working-copy? :boolean]
    [:change/bookmarks [:vector :string]]
-   [:change/description :string]])
+   [:change/description {:doc "First line"} :string]
+   [:change/full-description {:doc "Every line, joined by spaces: the marker holds no newlines"} :string]])
 
 (def FileChange
   [:map
