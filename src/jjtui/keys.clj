@@ -23,8 +23,8 @@
      [["ctrl+d"] :cursor/half-down "Half page down"]
      [["ctrl+u"] :cursor/half-up "Half page up"]
      [["@"] :cursor/working-copy "Jump to working copy"]
-     [["/"] :search "Search change ids, commit ids, descriptions"]
-     [["w"] :repo/switch "Switch repo / workspace (recent, by frecency)"]
+     [["/"] :search "Search ids & descriptions"]
+     [["w"] :repo/switch "Switch repo / workspace"]
      [["R" "ctrl+r"] :refresh "Refresh"]
      [["?"] :help "Help"]
      [["q"] :quit "Quit"]]]
@@ -41,7 +41,7 @@
      [["L"] :revset/set "Set log revset"]]]
    ["Diff"
     [[["enter"] :diff/open "Diff change / marks / file"]
-     [["D"] :diff/branch "Diff a branch from a picked base (trunk by default)"]
+     [["D"] :diff/branch "Diff a branch against a base"]
      [["v"] :diff/pick-tool "Pick diff tool"]]]
    ["Marks"
     [[["m" "space"] :mark/toggle "Toggle mark"]
@@ -65,9 +65,9 @@
     [[["b"] :bookmark/set "Set / create bookmark"]
      [["B"] :bookmark/menu "Bookmark… (delete / rename)"]
      [["p"] :push "Push"]
-     [["P"] :push-bookmarks "Push bookmarks of change, else pick one"]
+     [["P"] :push-bookmarks "Push change's bookmarks…"]
      [["f"] :fetch "Fetch"]
-     [["F"] :pull "Pull bookmarks of change, else pick one"]]]])
+     [["F"] :pull "Pull change's bookmarks…"]]]])
 
 (def keymap
   "key name -> action"

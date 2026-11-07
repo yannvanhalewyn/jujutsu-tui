@@ -288,13 +288,13 @@
 (deftest help-search-test
   (let [[s] (press (loaded) "?" "/" "p" "u" "s" "h")]
     (testing "typing filters the bindings, matching group titles too"
-      (is (str/includes? (help-text s) "Push bookmarks of change"))
+      (is (str/includes? (help-text s) "Push change's bookmarks"))
       (is (not (str/includes? (help-text s) "Rebase"))))
     (testing "letters go to the search, not to the help keys"
       (is (= :help (get-in (first (press s "q")) [:app/mode :mode/type]))))
     (testing "enter keeps the filter; then esc clears it before closing"
       (let [[s] (press s "enter")]
-        (is (str/includes? (help-text s) "Push bookmarks of change"))
+        (is (str/includes? (help-text s) "Push change's bookmarks"))
         (is (= :help (get-in (first (press s "j")) [:app/mode :mode/type])) "j scrolls again")
         (let [[s] (press s "escape")]
           (is (= :help (get-in s [:app/mode :mode/type])))

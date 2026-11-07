@@ -355,13 +355,13 @@
                 (for [[title bindings] keys/groups]
                   [title (for [[ks _ desc] bindings]
                            [(str/join " " (map keys/display-key ks)) desc])])
-                [["Modes" [["help" "/ search, enter done, esc clear"]
-                           ["search" "type to jump, ↑/↓ next/prev match, enter keep, esc back"]
-                           ["search active" "n/N next/prev match, / edit query, esc clear"]
-                           ["pick" "j/k move, enter select, esc cancel"]
-                           ["rebase pick" "a after, b before, r add/remove change, s source mode"]
-                           ["picker" "type to filter, ↑/↓, enter, esc"]
-                           ["menu" "press the option key, esc cancel"]]]])
+                [["Modes" [["help" "/ search · enter done · esc clear"]
+                           ["search" "↑/↓ match · enter keep · esc back"]
+                           ["searched" "n/N match · / edit · esc clear"]
+                           ["pick" "j/k move · enter select · esc cancel"]
+                           ["rebase pick" "a after · b before · r source · s mode"]
+                           ["picker" "type to filter · ↑/↓ · enter · esc"]
+                           ["menu" "option key · esc cancel"]]]])
         match? (fn [title [ks desc]]
                  (let [haystack (str/lower-case (str title " " ks " " desc))]
                    (every? #(str/includes? haystack %) terms)))]
@@ -370,26 +370,50 @@
               [title rows]))
           groups)))
 
-(defn- help-columns [state groups]
-  (let [groups (for [[title rows] groups]
-                 (concat [(bold (fg 6 title))]
-                         (for [[ks desc] rows]
-                           (str "  " (pad (fg 3 ks) 14) desc))
-                         [""]))
-        col-w 48
-        ncols (max 1 (quot (:app/width state) col-w))
-        total (reduce + (map count groups))
-        target (int (Math/ceil (/ total ncols)))
-        columns (reduce (fn [cols g]
-                          (let [cur (peek cols)]
-                            (if (and (seq cur) (> (+ (count cur) (count g)) target) (< (count cols) ncols))
-                              (conj cols (vec g))
-                              (conj (pop cols) (into cur g)))))
-                        [[]]
-                        groups)
-        height (apply max (map count columns))]
-    (for [i (range height)]
-      (str/join (for [col columns] (pad (get col i "") col-w))))))
+(defn- help-column
+  "Lines of one help column: its groups stacked, keys padded to the column's
+   widest key."
+  [groups]
+  (let [kw (apply max (for [[_ rows] groups [ks] rows] (width-of ks)))]
+    (butlast
+     (mapcat (fn [[title rows]]
+               (concat [(bold (fg 6 title))]
+                       (for [[ks desc] rows]
+                         (str "  " (pad (fg 3 ks) kw) "  " desc))
+                       [""]))
+             groups))))
+
+(defn- split-columns
+  "Groups split, in order, into at most `n` columns with the shortest
+   tallest column."
+  [groups n]
+  (let [height #(+ 2 (count (second %)))
+        pack (fn [cap]
+               (reduce (fn [cols g]
+                         (let [cur (peek cols)]
+                           (if (and (seq cur) (> (+ (reduce + (map height cur)) (height g)) cap))
+                             (conj cols [g])
+                             (conj (pop cols) (conj cur g)))))
+                       [[]]
+                       groups))]
+    (some #(let [cols (pack %)] (when (<= (count cols) n) cols))
+          (iterate inc (apply max (map height groups))))))
+
+(defn- help-columns
+  "The help lines, in as many content-sized columns as fit `width`."
+  [width groups]
+  (let [gap "   "
+        layout (fn [n]
+                 (let [cols (map help-column (split-columns groups n))]
+                   {:cols (map vec cols)
+                    :widths (map #(apply max (map width-of %)) cols)}))
+        fits? (fn [{:keys [widths]}]
+                (<= (+ (reduce + widths) (* (count gap) (dec (count widths)))) width))
+        {:keys [cols widths]} (or (first (filter fits? (map layout (range (count groups) 0 -1))))
+                                  (layout 1))]
+    (for [i (range (apply max (map count cols)))]
+      (str/join gap (concat (map (fn [col w] (pad (get col i "") w)) (butlast cols) widths)
+                            [(get (last cols) i "")])))))
 
 (defn- help-screen [state height]
   (let [search (get-in state [:app/mode :mode/search])
@@ -400,7 +424,7 @@
                       (str "  " (ti/text-input-view search))))
         lines (concat [header ""]
                       (if (seq groups)
-                        (map #(str " " %) (help-columns state groups))
+                        (map #(str " " %) (help-columns (dec (:app/width state)) groups))
                         [(dim "  no matching keys")]))
         offset (max 0 (min (get-in state [:app/mode :mode/offset] 0) (- (count lines) height)))]
     (map #(fit % (:app/width state)) (take height (drop offset lines)))))
